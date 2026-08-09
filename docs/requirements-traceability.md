@@ -42,7 +42,7 @@ Identity-bound evidence uses application ID `io.github.verybigsad.pimobile` and 
 | R2 `toolCallId` correlation | 0, 1 | protocol; Mac runtime | `ParallelToolCorrelationTest` | planned |
 | R2 LF-only framing | 0 | protocol; Mac runtime | `FramerUnicodeSeparatorTest`, `FramerCrlfTest`, `OversizeRecordFaultTest` at 16 MiB | planned |
 | R2 gap and epoch discard | 0, 1 | protocol; Android core | `SequenceGapRebuildTest`, `EpochChangeRebuildTest` | planned |
-| R2 raw retention/references | 0, 2 | protocol; Android UX | `ExactRawJsonDigestProjectionTest`, `UnknownTypeRetentionTest`, `RawReferenceDownloadTest` | planned |
+| R2 raw retention/references | 0, 2 | protocol; Android UX | escaped-frame inline decision, projector parity, 512 MiB/30-day raw ref eviction, digest/unavailable UI | planned |
 | R2 prompt images | 0, 1, 2 | protocol; blob store; composer | `PromptImageReadyRefHashTest`, `BlobOwnershipTest`, `BlobOrphanCrashSweepTest` | planned |
 | R2 steer vs follow-up | 2 | Mac RPC facade; conversation | `StreamingBehaviorSemanticsTest` | planned |
 | R2 accepted vs completed | 2 | conversation | `AcceptedNotCompletedTest` | planned |
@@ -51,10 +51,10 @@ Identity-bound evidence uses application ID `io.github.verybigsad.pimobile` and 
 | R3 per-extension scenarios | 1, 2, 4 | compatibility | Semantic plus PTY scenario per pinned package and per local extension, generated into the matrix | planned |
 | R3 UI method coverage | 0, 2 | compatibility | `EveryPi084UiMethodClassifiedTest`, structured/widget/ANSI/settlement fixtures | planned |
 | R3 invocation routing | 0, 2, 4 | compatibility | `InvocationManifestCoverageTest`, mandatory `/mcp` `/usage` `/agents` `/btw` `/llama` pre-route, 6/4/3/2/1 source-count check, `UnexpectedCommandWatchdogResyncTest` | planned |
-| R3 approval interception | 0, 2 | Pi patch/preload; approval | `PatchIntegrityTest`, `FinalMutatedArgsTest`, root/nested/`extensions:false` tests, direct RPC test | planned |
+| R3 approval interception | 0, 2 | Pi patch/preload; approval | `PatchIntegrityTest`, final tool args, resolved-prefix bash, root/nested/`extensions:false`, direct-RPC single-offer tests | planned |
 | R3 approval fail closed | 2 | approval broker | one global offer/FIFO eight, overflow, 30 s queue, 120 s decision, 150 s total boundaries, broker unavailable, stale hash, disconnect, sentinel, safe resume | planned |
 | R3 unsandboxed extension limit | 2 | compatibility/security | `DirectNodeFsSideEffectNotSandboxedTest` plus UX copy assertion | planned |
-| R3 terminal engine | 0, 4 | build; terminal | full integrity/packed/bundle hashes, deterministic build, clone-shim source locator, API 29/34/36 canary, too-old refusal | planned: API 29 WebView 91.0.4472.114 observed; app absent |
+| R3 terminal engine | 0, 4 | build; terminal | full integrity/packed/bundle hashes, deterministic build, clone-shim source locator, API 29/34/36 canary, too-old refusal | planned: WebView observed and terminal module builds; xterm canary absent |
 | R3 terminal reconnect/history | 4 | terminal | connected 5k lines, visible-pane reconnect, bounded/truncated separate capture drawer, no replay/full-history copy | planned |
 | R3 no false approval affordance | 2 | conversation, review | `NoGenericApproveAffordanceTest` | planned |
 | R4 screen states | 2, 4 | Android UX | empty/loading/error/offline/revoked, active-gap unavailable, dormant, indeterminate, broker-unreachable | planned |
@@ -77,17 +77,17 @@ Identity-bound evidence uses application ID `io.github.verybigsad.pimobile` and 
 | R6 ceremony verification | 1, 3 | transport/auth | `WebAuthnVerifierTest` covering challenge expiry, replay, UV, UP, counter, credential, and signature | planned |
 | R6 provider matrix | 0, 1 | auth/build | API 29–33 Play-services provider required; API 34+ third-party provider; provider-absent locked/setup state | planned |
 | R6 Bitwarden acceptance | 5 | manual | Physical release-signed Android 14+ device evidence, including Google-disabled/absent mode | blocked-external: no device; emulator fake/GPM providers are weaker |
-| R6 API 29 floor | 0, 1 | build | `MinSdkFloorBuildTest`, `PiApp_API_29`, Linux managed device, API 28 unsupported negative | planned: API 29 and negative API 28 AVDs installed; app absent |
+| R6 API 29 floor | 0, 1 | build | `MinSdkFloorBuildTest`, `PiApp_API_29`, Linux managed device, API 28 unsupported negative | partial: debug APK builds; API 29 install and API 28 negative not yet run |
 | R7 relay/control auth/privacy | 1, 5 | transport; relay | P-256 cold reconnect/replay/rotation/revoke, one-use data, control loss/restart, DB/log privacy, heartbeat-cost tests | planned |
 | R7 inner confidentiality | 1, 5 | transport/auth | provisional pinned server-auth restrictions, direct/relayed mTLS, `HostileRelayTest` | planned |
-| R7 certificate lifecycle | 1 | transport/auth | `PeerCertificateMatrixTest` for invalid, missing, expired, revoked | planned |
+| R7 certificate lifecycle | 1 | transport/auth | five-year CA, 30-day leaves, seven-day renewal, 24-hour overlap; invalid/missing/expired/revoked/live close | planned |
 | R7 deterministic protocol faults | 0, 1 | protocol | `FrameBoundsFaultTest`, `InvalidUtf8FaultTest`, `NoResyncScanTest` | planned |
-| R7 at-most-once journal | 1 | journal | crash matrix; dormant query/current resubmit/full revalidation; prior-approval rejection; 100 duplicates; ID/hash/journal failures | planned |
+| R7 at-most-once journal | 1 | journal | crash matrix; dormant/query/revalidation; 24 h/30 d/365 d/100k retention; capacity; 100 duplicates; ID/hash failures | planned |
 | R7 key storage implementation | 1 | transport/auth; Android security | `NonExportableKeystoreKeyTest`, `WrappedPkcs8PermissionsTest` on emulator | planned |
 | R7 physical key behavior | 5 | manual | hardware backing/invalidation evidence | blocked-external: emulator differs; no device |
 | R7 redaction | 0, 1 | security; all modules | `LogRedactionTest`, `CrashPathRedactionTest`, `TerminalByteRedactionTest` | planned |
 | R8 notification transport needs no FCM | 3 | push | FCM absent, UnifiedPush connector/fake distributor and opaque wake tests | planned |
-| R8 no-Google AVD smoke | 0, 3 | build; push/E2E | `PiApp_API_34_AOSP_UI` UI/push with fake auth plus headless `PiApp_API_34_AOSP` transport | planned: both AVDs installed; app absent |
+| R8 no-Google AVD smoke | 0, 3 | build; push/E2E | `PiApp_API_34_AOSP_UI` UI/push with fake auth plus headless `PiApp_API_34_AOSP` transport | planned: both AVDs installed and debug APK builds; smoke not run |
 | R8 physical full no-Google smoke | 5 | manual | Android 14+ release app + Bitwarden provider + ntfy with Google disabled/absent | blocked-external: no device |
 | R8 settle-only wake | 3 | Mac notifications | `WakeOnSettledOnlyTest` asserting no wake on `agent_end` with `willRetry` | planned |
 | R8 opaque payload | 3 | Mac notifications | `WakePayloadOpacityTest` including the distributor size cap | planned |
@@ -111,8 +111,8 @@ Identity-bound evidence uses application ID `io.github.verybigsad.pimobile` and 
 | R10 cost gate and destroy proof | 5 | infra | Current calculator record, budget alerts, destroy and orphan scan | planned |
 | R10 lock file committed | 0, 5 | infra | `.terraform.lock.hcl` tracked; explicit `!**/.terraform.lock.hcl`; state/vars ignored | planned: ignore rule exists, lock does not |
 | R11 suites exist and parity holds | 0-5 | CI | Full non-manual suite green; Kotlin and TypeScript fixture parity gate | planned |
-| R12 reproducible builds | 0, 5 | build | Wrapper/catalog locks, Pi package integrity+patch hash/source locator, xterm/node-pty npm integrity + packed/bundle hashes and deterministic build, SBOM/licenses/secrets, signed artifacts | planned |
-| R13 docs currency | continuous | integration | Docs, ADRs, and traceability updated in the same commit | partial: currently accurate for a planning-only repository |
+| R12 reproducible builds | 0, 5 | build | Wrapper/catalog locks, Pi package integrity+patch hash/source locator, xterm/node-pty npm integrity + packed/bundle hashes and deterministic build, SBOM/licenses/secrets, Apple-Silicon packaged native smoke, signed artifacts | planned |
+| R13 docs currency | continuous | integration | Docs, ADRs, and traceability updated in the same commit | partial: current through Stage 0 scaffold; remains continuous |
 
 ## Approval gate traceability
 
@@ -120,7 +120,7 @@ Called out separately because Pi itself has no approval boundary; the bridge pro
 
 | Claim | Proof |
 |---|---|
-| Final interception | Patch integrity/source locator; hook observes args after all handlers in root/nested/`extensions:false`; host direct RPC separately gated |
+| Final interception | Patch integrity/source locator; final tool args plus resolved `executeBash` in root/nested/`extensions:false`; direct RPC offers once; bridge actions gate |
 | Operation did not run | Sentinel absent before Allow and after Deny/disconnect/deadline/broker loss |
 | User saw final truth | `approval.offer` exact final operation/cwd/resource/ID/hash/policy/expiry matches interceptor |
 | Failure resumes safely | Overflow, 30 s queue timeout, 120 s decision expiry, 150 s cap, unreachable/malformed/stale response all block and Pi continues |

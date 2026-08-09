@@ -1,0 +1,9 @@
+{
+  "name": "@pimobile/mac-host",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "pi-mobile-host": "dist/cli.js" },
+  "scripts": { "build": "tsc -b", "test": "vitest run test" },
+  "dependencies": { "@pimobile/protocol": "0.1.0" }
+}

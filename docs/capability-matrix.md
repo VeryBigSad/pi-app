@@ -76,11 +76,11 @@ Treatment vocabulary:
 
 ## Approval
 
-Pi has no sandbox or generic approval command. Project-pinned Pi 0.84 receives a minimal integrity-checked patch; a `NODE_OPTIONS` preload registers a frozen Unix-socket policy client globally. The patched core calls it after all extension handlers for every tool/user-bash path, including nested AgentSessions and `extensions:false`. Host direct RPC bash/bridge actions are gated separately.
+Pi has no sandbox or generic approval command. Project-pinned Pi 0.84 receives a minimal integrity-checked patch; a `NODE_OPTIONS` preload registers a frozen Unix-socket policy client globally. The patched core calls it after tool handlers and in resolved `AgentSession.executeBash`, including nested AgentSessions and `extensions:false`. This covers normal direct RPC/interactive/programmatic bash once; host bridge-owned actions gate separately.
 
 | Aspect | Mechanism |
 |---|---|
-| Interception | Immutable out-of-band final hook sees extension-mutated args; nested-session coverage; host pre-dispatch for direct RPC/bridge actions |
+| Interception | Tool hook sees handler-mutated args; resolved `executeBash` covers direct RPC/interactive/programmatic once; nested sessions; host gates bridge-owned actions |
 | Scope | Versioned destructive/unclassifiable operations. Invocation manifest separately classifies slash-command side effects |
 | Binding | Final normalized operation, cwd/resource, reasons, `toolCallId` or host `commandId`, hash, policy version, expiry |
 | Wire UI | `approval.offer`, `approval.decision`, `approval.expired`; never Pi `confirm` |

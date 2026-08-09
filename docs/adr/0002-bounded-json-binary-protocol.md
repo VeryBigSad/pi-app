@@ -9,7 +9,7 @@ Pi’s full event and extension surface changes over time. Duplicating it into a
 
 ## Decision
 
-Use a 12-byte `PIMB` network-order header with JSON, blob, PCM, and terminal kinds. Carry exact Pi-line `rawJson` UTF-8 (excluding LF), SHA-256/size, and parsed reducer projection inline up to 128 KiB; larger exact bytes use digest/size references plus bounded projection. Cap JSON at 256 KiB, frames 1 MiB, chunks 64 KiB, batches 128 events/256 KiB, queues 512 frames/8 MiB. Retain unknown fields in exact bytes. Freeze schemas and cross-language fixtures, including prompt-image ready/ref/orphan flow.
+Use a 12-byte `PIMB` network-order header with JSON, blob, PCM, and terminal kinds. Carry exact Pi-line `rawJson` UTF-8 (excluding LF), SHA-256/size, and deterministic bounded projection. Inline requires raw ≤128 KiB and escaped envelope ≤256 KiB; otherwise exact bytes use digest/size references. Cap JSON at 256 KiB, frames 1 MiB, chunks 64 KiB, batches 128 events/256 KiB, queues 512 frames/8 MiB. Retain unknown fields in exact bytes. Freeze schemas and cross-language fixtures, including prompt-image ready/ref/orphan flow.
 
 ## Rejected
 

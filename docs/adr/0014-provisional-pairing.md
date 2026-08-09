@@ -9,7 +9,7 @@ A new device has no client certificate, so describing initial pairing as mTLS is
 
 ## Decision
 
-Android generates its non-exportable P-256 TLS key/CSR first and a separate route-auth key. It opens outer WSS, then inner TLS 1.3 with server authentication pinned by the five-minute QR and enters `PAIRING_PROVISIONAL`; no application data or mTLS is allowed. First owner uses distinct WebAuthn registration messages; later devices use assertion messages for the existing owner. Mac binds challenge to ceremony kind, invitation, TLS exporter, and CSR hash. Successful WebAuthn is followed by short code, local Mac confirmation, atomic invitation consumption, route-key registration, and certificate issuance. Provisional closes; mTLS starts on a new connection.
+Android generates its non-exportable P-256 TLS key/CSR first and a separate route-auth key. It opens outer WSS, then inner TLS 1.3 with server authentication pinned by the five-minute QR and enters `PAIRING_PROVISIONAL`; no application data or mTLS is allowed. First owner uses distinct WebAuthn registration messages; later devices use assertion messages for the existing owner. Mac binds challenge to ceremony kind, invitation, CSR hash, and the 32-byte exporter `EXPORTER-Pi-Mobile-Pairing-v1` with SHA-256 context over invitation UUID + CSR hash. Successful WebAuthn is followed by short code, local Mac confirmation, atomic invitation consumption, route-key registration, and certificate issuance. Provisional closes; mTLS starts on a new connection.
 
 DAL publishes both `delegate_permission/common.get_login_creds` and `delegate_permission/common.handle_all_urls`.
 

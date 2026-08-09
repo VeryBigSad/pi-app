@@ -5,13 +5,14 @@ Status: frozen after initial reviews/spikes and two final audits. Dispositions: 
 
 Every criterion below is written so a reviewer can say "passed" or "failed" without interpretation. Criteria that could not fail were rewritten during review, because an unfalsifiable requirement is how overclaiming happens.
 
-Fixed baseline: application ID `io.github.verybigsad.pimobile`, `minSdk 29`, passkey RP `verybigsad.github.io`, protocol major 1, integrity-pinned/patched Pi 0.84.0.
+Fixed baseline: app ID `io.github.verybigsad.pimobile`, SDK `36/36/29`, Gradle/AGP/Kotlin `8.13/8.13.2/2.4.10`, JDK21/JVM17, Node `22.23.2`, Apple Silicon macOS 14+, RP `verybigsad.github.io`, protocol 1, pinned/patched Pi 0.84.0.
 
 ## R1 — Android client synchronized with a Mac
 
 - Pairing: Android generates the P-256 CSR key first; outer WSS then QR-pinned inner server-auth TLS enters `PAIRING_PROVISIONAL`. The first owner uses WebAuthn registration; later devices assert the existing owner credential. Distinct messages bind challenge to invitation, TLS exporter, and CSR hash; local Mac confirmation precedes atomic invitation consumption/certificate issuance. mTLS starts only on a new post-certificate connection.
 - The session list matches Pi's own session files for the configured working directories, including tree-structured sessions.
-- **Resync is exact.** Android persists `(sessionId, streamEpoch, sequence, leafId)` after reducer commit; Pi leaf is null or eight lowercase hex, never UUID. A gap resets provisional state. Actor blocks mutations and waits idle/settled, freezes fence `F`, captures one canonical `get_entries`+leaf response, tags runtime adjuncts with `F`, rechecks leaf and retries whole attempt on change, pages it, then replays post-`F`. An active gap visibly marks canonical data unavailable. Result is byte-identical to fresh load.
+- **Resync is exact.** Android persists `(sessionId, streamEpoch, sequence, leafId)` after reducer commit; Pi leaf is null or eight lowercase hex, never UUID. A gap resets provisional state. Actor blocks mutations and waits idle/settled, freezes fence `F`, captures one canonical response, records final append ID separately from leaf, tags adjuncts with `F`, validates `since: lastAppendId`, retries on append/leaf change, pages it, then replays post-`F`. An active gap visibly marks canonical data unavailable. Result is byte-identical to fresh load.
+- Replay storage is bounded: 10,000 events/64 MiB/session, 256 MiB global, 24 hours. A miss resets canonically. Android encrypted cache is 50,000 finalized messages/512 MiB; drafts/trust/cursors are never LRU-evicted.
 - 100 consecutive reconnect cycles cause no lost, duplicated, or reordered committed event.
 - A `leafId` change from a fork or branch switch on the Mac converges on the phone without restarting the app.
 - Revoking the device certificate on the Mac terminates access within one handshake and shows an explicit revoked state, not a generic error.
@@ -24,7 +25,7 @@ Fixed baseline: application ID `io.github.verybigsad.pimobile`, `minSdk 29`, pas
 - Tool execution correlates by `toolCallId`, never by position.
 - Framing splits on LF only and strips one CR immediately before LF. A generic line reader must fail the Unicode-separator fixture. A Pi record over 16 MiB, malformed JSON, or EOF mid-record faults that subprocess rather than corrupting state.
 - Any unexpected transition, index, sequence gap, or epoch change discards every provisional block and forces snapshot recovery. Appending after a gap is a failure.
-- Each Pi line carries exact `rawJson` UTF-8 text excluding LF, parsed projection, size, and SHA-256; over 128 KiB exact bytes use a verified reference plus bounded projection. Unknowns stay in exact bytes and are inspectable, never executed.
+- Each Pi line carries exact `rawJson` UTF-8 excluding LF, bounded deterministic projection, size, and SHA-256. Inline requires raw ≤128 KiB and final escaped frame ≤256 KiB; otherwise use verified raw reference. Raw refs are globally 512 MiB/30 days; eviction preserves digest/size and says unavailable, never substitutes projection. Unknowns stay exact and are never executed.
 - Prompt images must complete upload/chunks/close/digest/`blob.ready` before command refs; payload hash covers ref fields. Cross-device/not-ready/mismatch fails before Pi; cancel/disconnect/expiry/startup sweeps orphans without deleting blobs needed by dormant commands.
 - `prompt` during streaming always carries an explicit `streamingBehavior`; steering and follow-up are distinct actions in the UI because they land at different points.
 - `success: true` renders as accepted, never completed. Post-acceptance failures surface from the event stream.
@@ -37,7 +38,7 @@ Fixed baseline: application ID `io.github.verybigsad.pimobile`, `minSdk 29`, pas
 - Invocation manifest records exact `requiresTerminal`, side-effect class, expected activity, and watchdog per path. `/mcp`, `/usage`, `/agents`, `/btw`, `/llama`, and all known custom paths pre-route. Real source call-site audit is subagents 6, ask-user-question 4, MCP 3, usage 2, btw 1. RPC has no custom event; unexpected-command timeout kills/restarts/resyncs, never retries, marks direct side effects unknown, and does not claim detection.
 - Harness covers every Pi 0.84 UI method, including `onTerminalInput`, working visibility/hidden-thinking label, autocomplete/editor getters, and fallback theme; structured fallback/widgets/ANSI/settlement errors remain fixtures.
 - `extension_error` diagnostics must not be presented as task failure.
-- **Real approval gate.** Host separately gates direct RPC bash/bridge actions; patched Pi calls the out-of-band final hook after all argument mutations. `approval.offer/decision/expired`—never Pi `confirm`—binds final operation/cwd/resource/reasons/ID/hash/policy/expiry. Sentinel is absent before Allow and after Deny/disconnect/broker loss; Allow once executes once; repeat prompts; changed args deny.
+- **Real approval gate.** Host gates destructive bridge-owned actions; patched Pi gates tool args after handlers and resolved `AgentSession.executeBash`, covering normal direct RPC/interactive/programmatic bash once. `approval.offer/decision/expired`—never Pi `confirm`—binds final operation/cwd/resource/reasons/ID/hash/policy/expiry. Sentinel is absent before Allow and after Deny/disconnect/broker loss; Allow once executes once; repeat prompts; changed args deny.
 - Broker concurrency is exact: one globally active offer, FIFO capacity eight across sessions/devices, 30-second maximum queue wait, then up to 120 seconds to decide. A local monotonic 150-second cap starts at hook invocation and clips the decision deadline, covering connect through response. Overflow/queue timeout blocks unseen. Missing broker, stale offer, disconnect, or classifier error also blocks and resumes the Pi turn.
 - No generic "Approve" affordance may appear on steering or review controls, because that would imply enforcement that does not exist there.
 - Guardrail, not sandbox: approved code runs with Mac permissions, and arbitrary extension Node/fs/process side effects can bypass tool hooks. A test demonstrates this limit and UI must state it.
@@ -67,17 +68,18 @@ Measured on a release build with R8 and a Baseline Profile via Macrobenchmark, o
 - RP ID is `verybigsad.github.io`. `github.io` alone is invalid because it is a public suffix.
 - Pages serves DAL with HTTP 200, JSON, no redirect, `android_app`, exact package/fingerprint, and both `delegate_permission/common.get_login_creds` and `delegate_permission/common.handle_all_urls`; CI cross-checks the signed APK, exact Android origin, and Digital Asset Links API.
 - The Android origin is the exact `android:apk-key-hash:` form derived from the same dedicated release certificate, and the Mac pins it separately from the RP ID.
-- The Mac is the verifier: it pins RP hash, origin, challenge, expiry, UV and UP, signature, credential, counter, and replay state. Five-minute single-use challenges.
+- The Mac is the verifier: it pins RP hash, origin, challenge, expiry, UV and UP, signature, credential, counter, and replay state. Five-minute single-use challenges. `auth.lock` downgrades immediately on device lock and after five continuous background minutes; an independent Mac lease enforces loss of the message/socket.
 - Manual acceptance requires a release-signed build and the Bitwarden Android provider on a physical device. This cannot be automated and cannot be claimed from an emulator.
 - `minSdk` is 29 because API 28 lacks platform TLS 1.3. App builds/runs on `PiApp_API_29`; `PiApp_API_28` is unsupported negative-only.
 
 ## R7 — Transport security
 
 - TLS 1.3 only. Pairing uses QR-pinned inner server-auth TLS in `PAIRING_PROVISIONAL`; mTLS is forbidden until certificate issuance. Normal remote data crosses one-use paired WSS; LAN uses direct mTLS. Path racing accepts first authenticated generation and never migrates commands.
-- Mac holds an authenticated control WSS with heartbeat/backoff. Relay challenge-authenticates P-256 route keys, notifies control, pairs one-use Mac/Android data WSS, and persists only route public keys/revocation. Cold reconnect, key overlap rotation/revoke, control loss, restart, hostile relay, cost, and database/log privacy are tested.
-- On normal data connections, invalid/missing/expired/revoked peer certificates fail; revocation also closes live connections. Provisional pairing accepts no client cert or data.
+- First-boot route registration uses a root-only one-use token generated outside Terraform state, retrieved over SSH and erased after public-key registration. Mac control/device/Mac-data WSS use JCS/DER P-256 proofs, 30-second audience challenges, two-minute replay retention, 30/90-second ping/liveness, and 20-second notices. Relay persists only route public keys/revocation; QR bootstrap is max 2 KiB/five minutes/Mac-signed; rotation overlap is 24 hours. Cold reconnect, key overlap rotation/revoke, control loss, restart, hostile relay, cost, and database/log privacy are tested.
+- Normal connections validate full certificate profile. P-256 CA validity is five years; server/device leaves are 30 days and renew with seven days remaining; server overlap is 24 hours. Invalid/missing/expired/revoked peers fail and revocation closes live connections. Provisional pairing accepts no client cert or data.
 - Sequence gaps, epoch changes, malformed frames, oversized frames, and invalid UTF-8 close or fault deterministically with a stable error code; no resynchronization scan is attempted on an authenticated stream.
 - **At-most-once mutations.** `ARMED` commits before Pi stdin; recovered ARMED is indeterminate. Recovered `RECEIVED` remains dormant until same-id/hash deliberate submit over current READY/user-auth connection revalidates auth/lease/leaf/blob/policy/approval. `command.query` cannot dispatch. Hash reuse mismatch/journal failure closes or rejects. Claim at-most-once dispatch, never exactly-once.
+- Retention is fail-closed: dormant `RECEIVED` 24 hours; full terminal-state payloads 30 days; ID/hash/state tombstones 365 days or 100,000 rows. Prompt blobs cap at 8 MiB each/64 MiB device/256 MiB global/32 uploads; orphan 15 minutes, dormant owner 24 hours, terminal state one hour. Capacity/integrity failure rejects mutations.
 - Crash injection at every state transition and stdin boundary proves at most one Pi line for 100 duplicate submissions.
 - Android TLS/CSR and relay route-auth keys are separate non-exportable P-256 Keystore keys; Mac CA/server material is encrypted PKCS#8 mode `0600`, Keychain-wrapped.
 - Redaction tests assert no prompt, Pi raw payload, terminal byte, audio buffer, credential, or key reaches any log sink, including crash paths.
@@ -118,7 +120,7 @@ All layers in [testing.md](testing.md) exist and run: contract and fuzz, Pi fram
 
 ## R12 — Delivery
 
-Reproducible builds use wrapper checksum, JDK 21, build-tools 36.0.0, catalog/locks, exact Pi 0.84 package integrity + patch hash/source locator, and pinned xterm/node-pty checksums. CI runs tests, secret scan, SBOM/licenses; release artifacts use the dedicated signer and private GitHub history is pushed.
+Reproducible builds use ADR-0019, wrapper checksum, catalogs/locks, exact Pi 0.84 integrity + patch/source locator, and pinned xterm/node-pty hashes. Mac host 1.0 is Apple Silicon macOS 14+ only; native dependencies get arm64 packaged smoke and no Intel claim. CI runs tests, secret scan, SBOM/licenses; release artifacts use the dedicated signer and private GitHub history is pushed.
 
 ## R13 — Maintainability
 

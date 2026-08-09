@@ -1,0 +1,16 @@
+{
+  "name": "@pimobile/protocol-tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "generate": "tsx src/generate.ts",
+    "verify": "tsx src/verify.ts"
+  },
+  "dependencies": {
+    "@pimobile/protocol": "0.1.0",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1"
+  }
+}

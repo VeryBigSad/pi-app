@@ -9,7 +9,7 @@ Two independently attached data sockets need a reliable way to summon a NATed Ma
 
 ## Decision
 
-Mac maintains a P-256 challenge-authenticated control WSS with heartbeat and jittered backoff. Android authenticates a data request with its registered route key; relay notifies control; Mac opens one outbound data WSS bound to a one-use notice; relay pairs and byte-splices. A signed pairing invitation bootstraps the first unregistered device. Relay persists only route key IDs/public keys and revocation; pairing state and data notices are bounded/in-memory. Rotation overlaps old/new public keys, then revokes old. Inner TLS remains QR-pinned server-auth while pairing and mTLS afterward; direct LAN remains one mTLS connection.
+VM first boot creates a root-only one-use registration token outside Terraform state; Mac retrieves it over SSH, registers its P-256 route key under TLS, and both erase it. Mac then maintains a challenge-authenticated control WSS: JCS/DER ECDSA-SHA256, SPKI keys, 32-byte nonce, 30-second audience-bound challenge, two-minute replay cache, 30-second ping, 90-second liveness, and jittered backoff. Android authenticates a data request with its registered route key; relay notifies control; Mac opens one outbound data WSS bound to a one-use notice; relay pairs and byte-splices. A max-2-KiB JCS QR signed by the Mac route key bootstraps the first unregistered device. Data notices expire in 20 seconds. Relay persists only route key IDs/public keys and revocation; invitation/notices/replay are bounded/in-memory. Rotation overlaps old/new public keys 24 hours, then revokes old. Inner TLS remains QR-pinned server-auth while pairing and mTLS afterward; direct LAN remains one mTLS connection.
 
 ## Consequences
 

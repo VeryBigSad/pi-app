@@ -1,0 +1,12 @@
+{
+  "files": [],
+  "references": [
+    { "path": "protocol/ts" },
+    { "path": "protocol/tools" },
+    { "path": "mac/host" },
+    { "path": "mac/approval" },
+    { "path": "mac/preload" },
+    { "path": "mac/pi-patch" },
+    { "path": "mac/compatibility" }
+  ]
+}

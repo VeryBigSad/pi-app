@@ -1,7 +1,7 @@
 # Pi Mobile 1.0 master plan
 
 Last updated: 2026-08-09
-Status: final-audited after two initial reviews, three spikes, and two final reviews; implementation not started
+Status: final-audited plan; Stage 0 scaffold started, executable contracts in progress
 
 ## Definition of done
 
@@ -101,7 +101,7 @@ Parallel lanes after a short schema kickoff:
 ### 0D Build/integration owner
 
 - Scaffold modules and ownership boundaries.
-- Commit Gradle wrapper/checksum and version catalog; pin JDK 21, AGP/Kotlin/Compose/Room/Credentials/WorkManager/SQLCipher/OkHttp and Node dependencies.
+- Freeze ADR-0019: Gradle 8.13/checksum, AGP 8.13.2, Kotlin/compiler 2.4.10, KSP 2.3.11, Compose BOM 2026.06.01, JDK21/JVM17, SDK 36/36/29, Node22.23.2/npm10.9.8/TS6.0.3, Go toolchain1.26.2; add catalog, verification, and locks.
 - Fix `minSdk 29` (platform TLS 1.3; API 28 unsupported), build-tools 36.0.0, application ID, and exact xterm/node-pty integrity/packed hashes/locks. Reproducibly bundle xterm for Chromium 91 with the narrow `structuredClone` shim; run a minimal API 29 WebView boot/render/Unicode/input canary before terminal feature work.
 - Add dependency locks, secret scan, SBOM/license jobs, and sanitized fixture policy.
 - Wire `PiApp_API_29`, `domonap`, `PiApp_API_36`, no-Google UI `PiApp_API_34_AOSP_UI`, and headless `PiApp_API_34_AOSP` into distinct lanes; run `PiApp_API_28` only as an unsupported-install negative. AOSP lanes use debug-only fake auth; production no-Google auth requires Android 14+ and a third-party provider.
@@ -147,7 +147,7 @@ Implement Go relay with persisted public-key/revocation registry only, control/d
 
 ### 1E Compatibility harness
 
-Run semantic and PTY probes against isolated copied configuration, deterministic providers, and mocked external systems. Record sanitized outcomes without mutating user configuration.
+Run semantic and PTY probes against isolated copied configuration, deterministic providers, and mocked external systems. Commit reviewed synthetic fixture extensions for CI that reproduce each local extension's UI/lifecycle shape without credentials or personal code; live local hashes/outcomes remain a separate uncommitted evidence artifact. Never mutate user configuration.
 
 Gate:
 
@@ -180,7 +180,7 @@ Parallel lanes:
 - Mac runtime: full RPC facade, idle-only single-entries snapshot fence/adjunct cursor/leaf retry/post-fence replay, all documented commands, blob download/upload, diagnostics.
 - Android UX: inbox, timeline, composer, model/thinking/queue/retry/compaction settings, session tree/actions, extension dialogs, raw inspector, image/artifact/diff cards.
 - Android performance/data: active-row coalescing, markdown cache, windowing/paging, scroll policy, baseline profile and Macrobenchmark datasets.
-- Approval owner: minimal pinned-Pi final-hook patch, global preload/Unix-socket client, host direct-RPC checks, final-argument classifier/broker, approval protocol, versioned corpus, global FIFO/overflow/30-second queue/120-second decision/150-second total boundary tests, unreachable/nested-session tests.
+- Approval owner: minimal pinned-Pi final-hook patch, global preload/Unix-socket client, resolved executeBash/direct-RPC single-offer checks, bridge-action gate, final-argument classifier/broker, approval protocol, versioned corpus, global FIFO/overflow/30-second queue/120-second decision/150-second total boundary tests, unreachable/nested-session tests.
 - Compatibility owner: semantic scenarios for every pinned package/local extension and generated matrix.
 
 Gate from fresh install:

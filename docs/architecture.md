@@ -45,7 +45,7 @@ Mac host
 └── node-pty + private tmux server/control client
 ```
 
-The Mac keeps one authenticated control WSS open with heartbeat and exponential backoff. On Android connection, the relay authenticates a P-256 challenge, notifies that control channel, and accepts one outbound, one-use Mac data WSS. It pairs those data sockets in memory and copies bytes. A signed pairing invitation is the only bootstrap for an unregistered first device. After pairing, P-256 route keys support cold reconnect; rotation publishes old and new keys for a bounded overlap before revocation.
+VM first boot creates a root-only one-use route-registration token outside Terraform state; the Mac retrieves it over SSH, atomically registers its P-256 route public key, and both erase it. The Mac then keeps one challenge-authenticated control WSS (30-second challenge/ping, 90-second liveness). Android uses its registered route key, or a five-minute Mac-route-signed QR for provisional pairing. Relay sends one 20-second notice; Mac opens/signs one outbound data WSS; relay atomically pairs and byte-splices. Notices/replay state are memory-only. Route rotation overlaps 24 hours, then revokes old.
 
 The relay durably stores only route registration public keys, key IDs, and revocation state. It terminates outer WSS but never inner TLS; inner bytes ignore WebSocket boundaries. It sees endpoint metadata, timing, route ID, and ciphertext, with no offline data queue or session store. The direct path is one TLS connection. Path racing accepts the first fully authenticated generation and closes the loser; a command never migrates between live generations.
 
@@ -73,7 +73,7 @@ NODE_OPTIONS="--require=$PI_MOBILE_POLICY_PRELOAD" \
   "$PI_MOBILE_PINNED_PI" --mode rpc --session "$PI_SESSION_FILE"
 ```
 
-The patch sees final mutated arguments. The broker globally serializes offers (one active, FIFO eight), allows 30 seconds to reach the front and up to 120 seconds for a decision, while a preload monotonic cap covers the full 150 seconds from hook invocation. Denial, timeout, disconnect, overflow, or broker failure returns a deterministic block result so the turn resumes rather than hangs. The host separately gates direct RPC `bash` and destructive bridge-owned actions. This is a guardrail: arbitrary extension Node/fs/process side effects outside Pi tool/user-bash paths are not sandboxed.
+The patch sees final mutated arguments. The broker globally serializes offers (one active, FIFO eight), allows 30 seconds to reach the front and up to 120 seconds for a decision, while a preload monotonic cap covers the full 150 seconds from hook invocation. Denial, timeout, disconnect, overflow, or broker failure returns a deterministic block result so the turn resumes rather than hangs. Patched resolved `executeBash` covers normal direct RPC, interactive, and programmatic bash once; the host separately gates destructive bridge-owned actions. This is a guardrail: arbitrary extension Node/fs/process side effects outside Pi tool/user-bash paths are not sandboxed.
 
 The host also owns the writer lease, LF-only scanner, strict delta assembly, command journal, idle-only snapshots, WebAuthn, inner/direct TLS, Groq, and opaque wakes. Pi is not generally embedded by the bridge; the preload coverage exists because installed extensions such as pi-subagents create nested in-process sessions.
 
@@ -115,7 +115,7 @@ Terminal input is ephemeral and never replayed after uncertain delivery.
 
 ## Authentication and trust boundaries
 
-Passkeys authenticate the user; mTLS certificates authenticate a paired device. They have separate revocation.
+Passkeys authenticate the user; mTLS certificates authenticate a paired device. They have separate revocation. Device lock or five continuous background minutes sends `auth.lock`; an independent Mac foreground lease downgrades to device-only state and requires fresh assertion.
 
 - RP ID: `verybigsad.github.io`.
 - Android origin: exact `android:apk-key-hash:${RELEASE_CERT_SHA256_BASE64URL}`, derived during the release build.
@@ -139,7 +139,7 @@ While connected, xterm retains 5,000 lines. Reconnect creates a fresh xterm/disp
 
 ## Mobile approval gate
 
-A shared Mac classifier/Unix-socket broker checks host direct RPC bash and destructive bridge actions. For agent tool/user-bash paths, the pinned Pi patch invokes the preload-registered final hook **after all extension handlers**, binding the final normalized arguments to `toolCallId` or host `commandId`. The wire protocol is `approval.offer/decision/expired`, never Pi `confirm`. Allow once or Deny only; one offer is globally active with FIFO capacity eight, 30-second queue wait, up-to-120-second decision window, and a monotonic 150-second total cap from hook invocation. Expiry, overflow, disconnect, absent broker, changed args, or classifier failure blocks and resumes safely. Known extension slash commands are invocation-manifest classified; destructive/unknown side-effect handlers gate or route terminal. Arbitrary extension Node/fs side effects remain outside containment.
+A shared Mac classifier/Unix-socket broker checks destructive bridge-owned actions. For agent tools, the pinned Pi patch invokes the preload hook after handlers; for bash, patched `AgentSession.executeBash` invokes it after shell-prefix resolution exactly once for normal direct RPC/interactive/programmatic paths, binding the final normalized arguments to `toolCallId` or host `commandId`. The wire protocol is `approval.offer/decision/expired`, never Pi `confirm`. Allow once or Deny only; one offer is globally active with FIFO capacity eight, 30-second queue wait, up-to-120-second decision window, and a monotonic 150-second total cap from hook invocation. Expiry, overflow, disconnect, absent broker, changed args, or classifier failure blocks and resumes safely. Known extension slash commands are invocation-manifest classified; destructive/unknown side-effect handlers gate or route terminal. Arbitrary extension Node/fs side effects remain outside containment.
 
 ## Push and voice
 
@@ -149,7 +149,7 @@ Voice uses foreground `AudioRecord`, 16 kHz mono PCM, 20 ms frames. Mac VAD pref
 
 ## Performance and data bounds
 
-The protocol caps JSON at 256 KiB, frame payloads at 1 MiB, binary chunks at 64 KiB, batches at 128 events/256 KiB, and each outbound queue at 512 frames/8 MiB. Android retains 500 finalized semantic messages and, only while connected, 5,000 xterm lines. Older semantic history is paged from encrypted storage; reconnect history is a separate bounded server capture.
+The protocol caps JSON at 256 KiB, frame payloads at 1 MiB, binary chunks at 64 KiB, batches at 128 events/256 KiB, and each outbound queue at 512 frames/8 MiB with a 10-second stall cap. Durable cache/journal/raw/blob quotas and 15-minute/24-hour/30-day/365-day retention are frozen in protocol-v1; capacity fails closed for mutations. Android retains 500 finalized semantic messages and, only while connected, 5,000 xterm lines. Older semantic history is paged from encrypted storage; reconnect history is a separate bounded server capture.
 
 The timeline uses stable item keys/content types, an isolated active streaming row, cached render artifacts, and frame-cadence coalescing. Release Macrobenchmarks—not debug scrolling—enforce the budgets in [plan.md](plan.md).
 

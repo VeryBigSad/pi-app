@@ -32,13 +32,13 @@ Kotlin and TypeScript codecs must consume **identical** checked-in fixtures. A f
 Mandatory cases:
 
 1. Fragmented and coalesced frame headers; every kind; maximum and oversized payload lengths; invalid magic, major, flags, and UTF-8; no resynchronization scan on an authenticated stream.
-2. Bounds enforcement before allocation: 1 MiB frame, 256 KiB JSON, 64 KiB binary, 128 events or 256 KiB per batch, 128 KiB inline raw record, 512 frames or 8 MiB per queue. The lower applicable bound wins.
+2. Bounds before allocation: 1 MiB frame, 256 KiB JSON, 64 KiB binary, 128 events/256 KiB batch, raw ≤128 KiB plus escaped-envelope check, 512 frames/8 MiB queue and 10-second stall. The lower bound wins.
 3. Binary stream lifecycle: `stream.open` before data, contiguous sequence and offset, duplicate chunk, overflow, digest mismatch, data after close, and cancellation.
-4. Exact Pi line contract: `rawJson` UTF-8 bytes excluding LF, parsed projection, size, SHA-256; inline equality and oversized raw-reference digest fetch. Parsed reserialization is never called exact.
+4. Exact Pi line contract: `rawJson` UTF-8 bytes excluding LF, parsed projection, size, SHA-256; shared bounded-projector equality and raw-reference digest fetch for raw-size or escaped-envelope overflow. Parsed reserialization is never called exact.
 5. Unknown types/fields remain in exact bytes and inspectable, never executed.
 6. Eight-lowercase-hex/null leaf IDs; UUID rejection. Active gaps wait idle. Canonical capture stores final append-order `lastAppendId` independently from branch leaf, validates `since: lastAppendId`, tags adjuncts, retries on append/leaf change, and replays post-fence. A fixture whose active leaf moved backward behind later off-branch appends must publish without livelock.
 7. Dormant recovered `RECEIVED`, current READY same-id/hash resubmit with full revalidation, non-dispatching `command.query`, and all command states.
-8. Prompt-image open/chunks/close/digest/`blob.ready`/ref, not-ready/hash/owner failures, disconnect/cancel/expiry/startup orphan cleanup, and journal retention.
+8. Prompt-image flow plus exact 8/64/256 MiB and 32-upload quotas; 15-minute orphan, 24-hour dormant, one-hour terminal cleanup; startup sweep never deletes a live row.
 9. Separate registration/assertion messages, `PAIRING_PROVISIONAL`, TLS-exporter+invitation+CSR-hash binding, and no mTLS claim before certificate.
 10. Approval offer/decision/expired exact binding; terminal history bounds/generation/truncation.
 11. Canonical RFC 8785 hashing: reorder invariant; absent fields excluded; image refs and expected eight-hex leaf included.
@@ -61,6 +61,7 @@ The journal is the reason a mobile client can be trusted with mutations, so it g
 - Kill before `RECEIVED`, after `RECEIVED`, before `ARMED`, after `ARMED` but before the first stdin byte, mid-write, and after the write but before `ACKED`.
 - Recovered `RECEIVED` remains dormant across time/restart and `command.query`; neither dispatches. Only same-id/hash resubmission on a current READY, user-authenticated connection may proceed after auth, lease, leaf, blobs, classification, and approval are revalidated.
 - Recovered `ARMED` becomes `INDETERMINATE` and never redispatches. A prior approval cannot be reused after recovery.
+- Fake-clock retention covers 24-hour dormant expiry, 30-day payload purge, 365-day/100,000-row tombstones, capacity rejection, and concurrent sweep/submit.
 - 100 duplicate/concurrent submissions of one `commandId`/hash produce **at most one** Pi line.
 - Duplicate id with a different canonical hash closes with `COMMAND_ID_REUSE`.
 - Journal integrity failure or lock loss rejects all mutations rather than proceeding.
@@ -70,9 +71,9 @@ The journal is the reason a mobile client can be trusted with mutations, so it g
 
 - Environment fidelity: the hosted process reports the same manifest as a terminal run, including all 8 packages and all 5 local extensions, with integrity hashes.
 - Happy path, dialogs by id including a timeout auto-resolution, abort mid-stream, abort during retry.
-- Approval: patch integrity/source drift; hook runs after every handler's mutation and in root/nested/`extensions:false` AgentSessions; direct RPC bash separately gates; one global active offer/FIFO eight; ninth-request overflow, 30-second queue timeout, 120-second decision expiry, and 150-second total cap all block/resume; offer/decision/expired binding; sentinel absent before Allow and after Deny/disconnect.
+- Approval: patch integrity/source drift; tool hook runs after handler mutation and resolved `executeBash` in root/nested/`extensions:false`; direct RPC/interactive/programmatic normal bash each produce one offer; one global active offer/FIFO eight; ninth-request overflow, 30-second queue timeout, 120-second decision expiry, and 150-second total cap all block/resume; offer/decision/expired binding; sentinel absent before Allow and after Deny/disconnect.
 - Extension limits: a fixture performs direct Node `fs` side effects and proves they are **not** sandboxed. Known `/mcp`, `/usage`, `/agents`, `/btw`, `/llama` paths pre-route; unexpected command watchdog kills/restarts/resyncs and never claims custom-event detection.
-- Reconnect: mid-stream byte identity; active-gap unavailable state; idle canonical fence; adjunct tags; append/leaf change retries; post-fence events replay once.
+- Reconnect: mid-stream byte identity; active-gap unavailable; idle fence; append/leaf retries; post-fence replay. Replay 10,000/64 MiB/session, 256 MiB global, 24-hour edges reset rather than truncate.
 - Fork/backward branch fixture returns later off-branch append entries but an older active `leafId`; validation uses final `lastAppendId`, returns empty with unchanged leaf, publishes once, and never loops. A concurrent append or branch move retries the whole attempt.
 - `reload_runtime` from the local `self-reload.ts` extension interrupts the transport; the client must recover rather than wedge.
 - Writer-lease conflict: a second writer on one session faults visibly.

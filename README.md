@@ -2,7 +2,7 @@
 
 Native Android control surface for the Pi coding agent running on your Mac. The Mac keeps every credential, runs Pi, and owns session truth; the phone is a fast, secure client for triage, steering, review, and dictation.
 
-> **Status: final-audited architecture/plan; implementation and executable contracts not started.** No Android module, Mac host, relay, or Terraform exists. This is reviewed design backed by [ADRs](docs/adr/README.md), initial reviews/spikes, and two final audits—not shipped code. Machine facts are marked verified.
+> **Status: Stage 0 implementation in progress; not shipped.** The pinned Gradle/Android shell builds, the Node workspace checks, and the Go relay health scaffold tests. Protocol schemas/codecs, pairing, Pi runtime, terminal, push, voice, and Terraform apply remain incomplete. Design is backed by [ADRs](docs/adr/README.md); evidence claims stay scoped.
 
 Application ID: `io.github.verybigsad.pimobile` · `minSdk 29` · Passkey RP: `verybigsad.github.io` · Pi baseline: 0.84.0 + reviewed patch
 
@@ -52,13 +52,13 @@ Key decisions and why:
 | Decision | Reason | ADR |
 |---|---|---|
 | Run an integrity-pinned, minimally patched Pi 0.84 CLI subprocess per session | Preserves real CLI loading/settings/packages/skills/prompts/extensions while adding only the reviewed final-policy call | [0001](docs/adr/0001-pi-rpc-subprocess.md) |
-| Bounded 12-byte `PIMB` JSON/binary protocol | Carries exact Pi-line `rawJson` UTF-8 plus digest and parsed projection, with references above 128 KiB; supports terminal, prompt blobs, and PCM under hard bounds | [0002](docs/adr/0002-bounded-json-binary-protocol.md) |
+| Bounded 12-byte `PIMB` JSON/binary protocol | Carries exact Pi-line `rawJson` UTF-8 plus digest and parsed projection, with raw references whenever 128 KiB raw or 256 KiB escaped-frame bounds would be exceeded; supports terminal, prompt blobs, and PCM under hard bounds | [0002](docs/adr/0002-bounded-json-binary-protocol.md) |
 | Fail-closed at-most-once SQLite command journal | Pi RPC ids are correlation ids, not idempotency keys: a probe with a duplicate id executed bash twice, so blind retry after a crash is unsafe | [0003](docs/adr/0003-fail-closed-command-journal.md) |
 | Standing Mac control WSS + one-use data rendezvous + inner TLS; direct LAN mTLS | A NATed Mac remains reachable without keeping a relay data tunnel; P-256 route challenge auth survives cold reconnect, and LAN skips relay latency | [0013](docs/adr/0013-authenticated-control-data-rendezvous.md) |
 | WebAuthn verified on the Mac, RP on GitHub Pages | The RP host only needs to serve Digital Asset Links; verification belongs where session truth already lives | [0005](docs/adr/0005-mac-webauthn-verifier.md) |
 | UnifiedPush with self-hosted ntfy primary | Doze makes background sockets unreliable, and FCM would require external Google credentials; optional FCM stays behind the same wake interface but is not a release gate | [0006](docs/adr/0006-unifiedpush-ntfy.md) |
 | Bundled xterm in a hardened WebView + node-pty + private tmux with split input | RPC returns `undefined` from `ctx.ui.custom()`; tmux consumes Kitty negotiation, so exact key bytes go through a control client while output goes through the display PTY | [0007](docs/adr/0007-terminal-compatibility.md) |
-| Minimal Pi 0.84 final-policy patch + preload broker | Ordinary extension hooks can mutate arguments and nested AgentSessions may disable extensions; the immutable out-of-band hook runs last in every in-process session, while the host separately gates direct RPC/bridge actions | [0012](docs/adr/0012-final-policy-broker.md) |
+| Minimal Pi 0.84 final-policy patch + preload broker | Ordinary extension hooks can mutate arguments and nested AgentSessions may disable extensions; the immutable out-of-band hook gates final tool args and resolved `executeBash` in every in-process session, while the host separately gates bridge-owned actions | [0012](docs/adr/0012-final-policy-broker.md) |
 | VAD-driven 8-12 s Groq chunks | Batch-only transcription needs ordered chunks; durable RPM/RPD/audio-window limits, 429 backoff, exact 10 s minimum billing, and hard daily/monthly budgets bound cost | [0009](docs/adr/0009-groq-vad-chunking.md) |
 | Exactly one dedicated YC VM, created last | Remote rendezvous and no-Google push need one always-on public host; serverless WebSockets are unsuitable for terminal and PCM traffic | [0010](docs/adr/0010-one-dedicated-yc-vm.md) |
 | Native Kotlin + Compose | Credential Manager, Keystore, audio, WorkManager, accessibility, and release performance all need native integration | [0011](docs/adr/0011-native-android-stack.md) |
@@ -120,7 +120,8 @@ See [docs/security.md](docs/security.md).
 | Emulator / platform-tools | `37.1.11.0` / `37.0.1` |
 | AVDs | Supported Google APIs: `PiApp_API_29`, `domonap`, `PiApp_API_36`; no-Google UI: `PiApp_API_34_AOSP_UI`; headless ATD: `PiApp_API_34_AOSP`; unsupported negative: `PiApp_API_28` |
 | API 29 WebView | `91.0.4472.114`; xterm needs the planned local `structuredClone` shim and runtime canary |
-| JDK | Temurin 21.0.8 and 25.0.2 present; no system Gradle, so the wrapper is mandatory |
+| Build tuple | Gradle 8.13, AGP 8.13.2, Kotlin 2.4.10, Compose BOM 2026.06.01, JDK21/JVM17, SDK 36/36/29 |
+| JDK | Temurin 21.0.8 and 25.0.2 present; wrapper/JDK21 mandatory |
 | Node / Go / Terraform | 22.23.2 / 1.26.2 / 1.5.7 |
 | Groq key | `~/.groq_key`, mode `0600`, 57 bytes. Read on the Mac at request time only, never serialized into a frame |
 | tmux | 3.5a; `capture-pane -e` and `pipe-pane` both confirmed working |

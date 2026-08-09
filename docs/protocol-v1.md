@@ -1,7 +1,7 @@
 # Pi Mobile application protocol v1
 
 Last updated: 2026-08-09
-Status: contract to freeze with schemas and cross-language fixtures before implementation
+Status: prose contract frozen; executable schemas and cross-language fixtures in progress
 
 This protocol runs inside TLS 1.3. Normal data connections require mTLS. Pairing alone runs in `PAIRING_PROVISIONAL` over inner server-auth TLS pinned by the QR and cannot access sessions or mutations. Remotely, a standing Mac control WSS lets the relay summon a one-use outbound Mac data WSS to pair with Android; locally the inner stream runs directly over TCP. WebSocket boundaries have no protocol meaning.
 
@@ -43,7 +43,7 @@ Readers must tolerate arbitrary fragmentation/coalescing. Invalid magic, major, 
 | Bounded tmux history response | 5,000 lines and 1 MiB, lower limit wins |
 | Finalized semantic messages retained in memory | 500 |
 
-The lower applicable bound wins. Length is checked before allocation. Queue exhaustion never drops authoritative semantic data: producer flow control applies, then the connection closes with `RESOURCE_EXHAUSTED` if progress cannot resume. Terminal frames may be superseded only after an explicit `terminal.reset`; audio stops visibly rather than buffering without bound.
+The lower applicable bound wins. Length is checked before allocation. Queue exhaustion never drops authoritative semantic data: producer flow control applies for at most 10 seconds, then the connection closes with `RESOURCE_EXHAUSTED` if progress cannot resume. Terminal frames may be superseded only after an explicit `terminal.reset`; audio stops visibly rather than buffering without bound.
 
 ## Binary prefixes
 
@@ -56,11 +56,23 @@ The lower applicable bound wins. Length is checked before allocation. Queue exha
 | 8 | byte offset, unsigned big-endian |
 | remaining | data |
 
-A JSON `stream.open` must precede data and defines `streamId`, `purpose`, media type/PCM format, expected length if known, SHA-256 if known, and per-stream limit. `stream.close` supplies final length and SHA-256. Sequence and offset must both be contiguous; otherwise the receiver cancels the stream. Unknown stream, duplicate chunk, overflow, digest mismatch, or data after close is fatal to that stream and reported by `stream.error`.
+A JSON `stream.open` must precede data and defines `streamId`, `purpose`, media type/PCM format, expected length if known, SHA-256 if known, and per-stream limit. `stream.close` supplies final length and SHA-256. Sequence and offset must both be contiguous; otherwise the receiver cancels the stream. Unknown stream, duplicate chunk, overflow, digest mismatch, or data after close is fatal to that stream and reported by `stream.error`. UUID prefix bytes use RFC 4122 network byte order, identical to the 16 bytes represented by canonical UUID hex groups with hyphens removed.
 
 `TERMINAL_BYTES` starts with two unsigned 64-bit big-endian fields: `terminalGeneration` and `sequence`, followed by bytes. Terminal sequences are contiguous per direction. A gap forces `terminal.reset` and tmux redraw; input is never replayed.
 
 Audio v1 is signed 16-bit little-endian, 16 kHz, mono PCM. Any other format requires a negotiated future minor version.
+
+## Durable quotas and retention
+
+These are protocol-visible limits, not unbounded implementation details:
+
+- Mac replay cache: 10,000 events or 64 MiB per session, 256 MiB globally, and 24 hours, lower bound first. A miss sends `sync.reset` and canonical recovery.
+- Exact raw-reference store: 512 MiB globally and 30 days. Eviction preserves size/digest and marks exact bytes unavailable; UI never substitutes projection as raw.
+- Prompt blobs: 8 MiB each, 64 MiB per device, 256 MiB globally, and 32 concurrent uploads. Unreferenced uploads expire after 15 minutes; dormant `RECEIVED` owns them for at most 24 hours; terminal journal states (ACKED, REJECTED, or INDETERMINATE) release temp blobs after one hour.
+- Command journal: dormant `RECEIVED` expires rejected after 24 hours. Full ACKED/REJECTED payloads retain 30 days; ID/hash/state tombstones, including INDETERMINATE, retain 365 days or 100,000 rows. Capacity/integrity failure rejects new mutations rather than deleting live protection.
+- Android encrypted cache: 50,000 finalized messages or 512 MiB globally. Drafts, trust state, and committed cursors are not LRU-evicted; other cache eviction triggers host paging.
+
+Sweeps are transactional, use injected clocks in tests, and never delete a blob referenced by a currently dispatchable row.
 
 ## JSON envelope
 
@@ -82,6 +94,7 @@ Every JSON frame is one object:
 - Pi `leafId`/`expectedLeafId` is either `null` or exactly eight lowercase hex characters (`^[0-9a-f]{8}$`); it is not a UUID.
 - Event messages carry `sessionId`, `streamEpoch` UUIDv4, and unsigned 64-bit `sequence` encoded as a decimal string to avoid JavaScript precision loss.
 - Unknown fields are retained. Unknown `type` values are stored and shown by the raw inspector; they are not executed.
+- Any unsigned 64-bit value is encoded as decimal text in JSON and stored as decimal text, never JavaScript `number`, Kotlin `Long`, or SQLite INTEGER.
 
 Canonical JSON for hashes is UTF-8 RFC 8785/JCS. Hashes are lowercase hex SHA-256 unless a field says otherwise.
 
@@ -96,14 +109,14 @@ On a normal post-certificate mTLS connection, first application messages are:
 
 A provisional pairing stream instead starts with bounded `pair.begin` after frame-version validation; normal `client.hello` is not accepted there. Different majors fail with `UNSUPPORTED_VERSION`. Normal peers select the highest common minor; features require both advertisements. A peer may tighten limits but not exceed v1 absolutes.
 
-Connection phases are `PAIRING_PROVISIONAL`, `NEGOTIATING`, `DEVICE_AUTHENTICATED`, `USER_AUTHENTICATED`, `SYNCING`, `READY`, `CLOSING`. A QR-pinned server-auth TLS connection enters only `PAIRING_PROVISIONAL`; it accepts bounded pairing/control messages and never session content, command, terminal, voice, or blob access. Certificate issuance closes it. A new mTLS connection starts `NEGOTIATING`. Before user authentication, only hello, assertion, generic push/cert status, ping, and close are accepted. Session content and mutations require `READY`.
+Connection phases are `PAIRING_PROVISIONAL`, `NEGOTIATING`, `DEVICE_AUTHENTICATED`, `USER_AUTHENTICATED`, `SYNCING`, `READY`, `CLOSING`. A QR-pinned server-auth TLS connection enters only `PAIRING_PROVISIONAL`; it accepts bounded pairing/control messages and never session content, command, terminal, voice, or blob access. Certificate issuance closes it. A new mTLS connection starts `NEGOTIATING`. Before user authentication, only hello, assertion, `auth.lock`, generic push/cert status, ping, and close are accepted. Session content and mutations require `READY`. Android sends `auth.lock` immediately on device lock and after five continuous minutes backgrounded; the Mac independently enforces the same background-lease timeout if the message/socket disappears. Lock downgrades to `DEVICE_AUTHENTICATED`, cancels content streams, and requires a fresh assertion.
 
 ## Required message families
 
 | Family | Types |
 |---|---|
 | Control | `client.hello`, `server.hello`, `ping`, `pong`, `error`, `close` |
-| Pairing/authentication | `pair.begin`, `pair.csr`, `auth.registration.options`, `auth.registration.response`, `auth.assertion.options`, `auth.assertion.response`, `auth.result`, `pair.confirm`, `pair.result` |
+| Pairing/authentication | `pair.begin`, `pair.csr`, `auth.registration.options`, `auth.registration.response`, `auth.assertion.options`, `auth.assertion.response`, `auth.result`, `auth.lock`, `pair.confirm`, `pair.result` |
 | Sync | `sync.resume`, `sync.replay`, `sync.reset`, `snapshot.waiting`, `snapshot.begin`, `snapshot.page`, `snapshot.end`, `event.batch`, `event.ack` |
 | Commands | `command.submit`, `command.query`, `command.state`, `command.result` |
 | Approval | `approval.offer`, `approval.decision`, `approval.expired` |
@@ -114,13 +127,30 @@ Connection phases are `PAIRING_PROVISIONAL`, `NEGOTIATING`, `DEVICE_AUTHENTICATE
 
 Schemas must set required fields and bounds while permitting additive unknown fields.
 
+## Outer relay route protocol
+
+Outer relay control is not the inner application protocol. Before byte splice, each WSS text frame contains one UTF-8 JSON object, capped at 16 KiB; compression, fragmentation beyond WebSocket handling, binary pre-auth frames, and unknown executable types are rejected. P-256 public keys are base64url uncompressed SPKI DER; signatures are base64url ASN.1 DER ECDSA-SHA256 over RFC 8785/JCS of the `signed` object. Nonces are 32 random bytes. Challenges expire in 30 seconds and their replay entries remain two minutes.
+
+A first Mac route key is provisioned once: VM first boot creates a root-readable one-use 256-bit token outside Terraform state; the Mac retrieves it over authenticated SSH, uses it only on the relay registration endpoint under TLS, and both sides erase it after atomically storing the Mac route public key. It is never a durable relay bearer. Thereafter the registered Mac key signs device-key add/revoke and key-rotation requests. Rotation permits old+new keys for 24 hours, then revokes old.
+
+Control connection:
+
+1. Mac opens WSS and sends `route.control.begin {routeId,keyId}`.
+2. Relay returns `route.challenge` bound to `audience:"control"`, route/key IDs, nonce, and expiry.
+3. Mac returns `route.proof` with that exact signed tuple. Relay checks registry, expiry, signature, and replay before `route.control.ready`.
+4. Ping is 30 seconds; 90 seconds without a valid pong closes control. Reconnect uses a fresh challenge.
+
+Normal Android data rendezvous signs a fresh `audience:"device-data"` challenge with its registered device route key. Provisional Android instead presents the signed QR invitation described below; it grants only one pairing rendezvous. The relay sends the authenticated Mac control socket `route.notice {rendezvousId,nonce,expiresAt,mode}`. Mac opens one outbound data WSS and signs a fresh `audience:"mac-data"` challenge bound to that notice. Matching sockets must arrive within 20 seconds; the in-memory notice is atomically consumed, then the relay switches to bounded binary byte splice and no longer parses inner data. Restart loses notices, never credentials or content.
+
+The QR URI is `pimobile://pair?v=1&d=<base64url>` where `d` is a JCS JSON envelope, capped at 2 KiB decoded. Its signed payload contains version, relay WSS URL, route ID, Mac route key ID, invitation UUID, five-minute expiry, 32-byte nonce, provisional Mac server-certificate SHA-256, and direct-LAN host/port candidates. The Mac route key signature lets the relay authenticate first-device provisional attachment without a device key. Relay observation of route/invitation metadata is explicit; invitation use is one-shot in relay memory and again atomically consumed by the Mac on certificate issuance.
+
 ## Pairing and authentication flow
 
 Before transport, Android generates its non-exportable P-256 TLS key/CSR, hashes canonical DER, and generates a separate P-256 route-auth key. The QR supplies a five-minute invitation and provisional Mac server-certificate fingerprint. Android opens outer WSS, then inner TLS 1.3 with **server authentication only**, pins that fingerprint, and enters `PAIRING_PROVISIONAL`; client-certificate requests are forbidden there.
 
 1. `pair.begin` carries invitation ID, device route-key ID/public key, and CSR hash; `pair.csr` carries the bounded CSR whose hash must match.
 2. If no owner credential exists, Mac sends `auth.registration.options`; only `auth.registration.response` is accepted. Otherwise it sends `auth.assertion.options`; only `auth.assertion.response` is accepted. Registration and assertion are never multiplexed through an ambiguous message.
-3. The Mac stores a challenge record bound to ceremony kind, invitation ID, TLS exporter, CSR hash, RP, exact Android origin, and expiry. A response on another TLS connection, invitation, CSR, or ceremony fails.
+3. The Mac stores a challenge record bound to ceremony kind, invitation ID, TLS exporter, CSR hash, RP, exact Android origin, and expiry. The exporter is 32 bytes from label `EXPORTER-Pi-Mobile-Pairing-v1` and context `SHA-256("pimobile-pair-v1\0" || invitation UUID bytes || CSR SHA-256 bytes)`. A response on another TLS connection, invitation, CSR, or ceremony fails.
 4. `auth.result` precedes transcript-bound short-code display. `pair.confirm` reports waiting/confirmed/rejected state; local Mac confirmation is mandatory and cannot be supplied by Android.
 5. On confirmation the Mac atomically consumes the invitation, registers/revokes route public keys as needed, signs the CSR, and returns `pair.result` with the bounded certificate chain. The provisional stream closes. Only a new mTLS connection may enter normal negotiation.
 
@@ -148,7 +178,7 @@ A Pi event is transported without pretending a parsed object preserves source by
 }
 ```
 
-For inline records, parsing `rawJson` must deep-equal `projection`; only `rawJson` is the lossless form. Over 128 KiB, exact bytes stay on Mac behind `rawRef {streamId,size,sha256,mediaType}` and the event carries a bounded, explicitly non-lossless projection sufficient for routing. Fetching the reference produces the exact `rawJson` bytes and must match the same digest before inspection. Unknown fields remain in exact bytes even when the reducer ignores them. Snapshots/histories are paginated; no message bypasses limits.
+`projection` is always a deterministic bounded reducer subset, never a claim to be the complete parsed object. Tests parse `rawJson` and require the shared projector to produce `projection`; only `rawJson` is lossless. Inline is allowed only when raw bytes are at most 128 KiB **and** the final escaped JSON frame remains within 256 KiB. Otherwise exact bytes stay on Mac behind `rawRef {streamId,size,sha256,mediaType}`. Fetching the reference produces exact bytes and must match the same digest before inspection. Unknown fields remain in exact bytes even when the reducer ignores them. Snapshots/histories are paginated; no message bypasses limits.
 
 ### Strict delta assembly
 
@@ -216,6 +246,8 @@ Events are never silently skipped. Duplicate committed events are ignored by cur
 Structured Pi `select`, `confirm`, `input`, and `editor` requests are raw events with stable Pi request IDs. Android responses are journaled `command.submit` operations. Fire-and-forget `notify`, `setStatus`, `setWidget`, `setTitle`, and `set_editor_text` remain raw and are sanitized before display. ANSI control sequences in structured strings are removed or converted by an allowlisted parser.
 
 Approval never uses `extension_ui_request` or Pi `confirm`. `approval.offer` carries broker offer ID, operation ID (`toolCallId` or host `commandId`), final normalized arguments, cwd/resource, reasons, policy version, argument hash, and absolute expiry. `approval.decision` repeats offer/operation/hash and permits only `allow_once` or `deny`; it is accepted only from the originating READY/user-authenticated connection and once on the live operation. The broker permits one globally active offer and a FIFO of at most eight policy requests across sessions/devices. The preload starts a local monotonic 150-second cap at hook invocation. A queued request must be promoted within 30 seconds or blocks without an offer. Promotion fixes a decision deadline at the earlier of 120 seconds later or the hook cap, with matching absolute `expiresAt`; only a decision received before the broker's monotonic deadline can win. `approval.expired` closes the sheet after deadline/cancellation. The local cap covers connect, queue, decision, and response. Overflow, broker loss, disconnect, stale offer, or tuple mismatch yields a block result and safely resumes the turn.
+
+Patched `AgentSession.executeBash` invokes policy once after shell-prefix resolution and before its normal execution, covering direct RPC, interactive, and programmatic calls without a duplicate host prompt. The tool hook remains after tool handlers. The bridge separately gates only destructive bridge-owned actions outside Pi. An extension that handles `user_bash` itself can perform arbitrary side effects before returning a result and remains inside the documented non-sandbox limitation.
 
 RPC produces no event when `ctx.ui.custom()` returns `undefined`. Therefore the generated invocation manifest classifies each known command path with `requiresTerminal` and side-effect class before dispatch. `/mcp`, `/usage`, `/agents`, `/btw`, `/llama`, and every discovered custom path pre-route to terminal. Destructive or unknown side-effect extension commands require broker approval or explicit terminal routing. An unexpected extension-command watchdog may kill/restart/resync after bounded inactivity, never auto-retries the invocation, and reports direct extension side effects as possibly unknown. It reports a generic compatibility timeout, never detected `custom()`.
 

@@ -1,0 +1,8 @@
+{
+  "name": "@pimobile/preload",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.cjs",
+  "scripts": { "build": "tsc -b", "test": "vitest run test" }
+}
