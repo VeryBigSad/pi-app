@@ -37,7 +37,7 @@ RPC mode is started with `pi --mode rpc [options]` and speaks JSONL over stdin/s
 - Commands are JSON objects on stdin, one per line; responses carry `type: "response"`; events stream on stdout as JSON lines.
 - Optional `id` correlates request/response. `bash_execution_update` echoes the `id` of its originating `bash` command.
 - **Framing is strict LF-only.** Split on `\n` only; strip an optional trailing `\r`. Node `readline` is explicitly called out as non-compliant because it also splits on `U+2028`/`U+2029`, which are legal inside JSON strings (`docs/rpc.md:28-39`). This dictates a hand-rolled framer on both the Mac bridge and any re-encoding hop.
-- `--mode json` is a separate one-shot stream mode whose `message_update` events omit cumulative `partial` snapshots (`docs/json.md:1-25`). RPC mode is the correct choice for an interactive client precisely because it retains bidirectional commands.
+- `--mode json` is a separate one-shot stream mode. **RPC `message_update` is also delta-only**: it omits cumulative `message` and `assistantMessageEvent.partial` snapshots (`docs/rpc.md:915-959`). RPC is the correct interactive choice because it is bidirectional, not because it supplies cumulative stream state.
 
 Command groups present in `docs/rpc.md`: prompting (`prompt`, `steer`, `follow_up`, `abort`, `new_session`), state (`get_state`, `get_messages`), model (`set_model`, `cycle_model`, `get_available_models`), thinking (`set_thinking_level`, `cycle_thinking_level`, `get_available_thinking_levels`), queue modes (`set_steering_mode`, `set_follow_up_mode`), compaction (`compact`, `set_auto_compaction`), retry (`set_auto_retry`, `abort_retry`), bash (`bash`, `abort_bash`), session (`get_session_stats`, `export_html`, `switch_session`, `fork`, `clone`, `get_fork_messages`, `get_entries`, `get_tree`, `get_last_assistant_text`, `set_session_name`), commands (`get_commands`).
 
@@ -49,6 +49,12 @@ Prompt semantics worth encoding in the client state machine:
 - Images ride inline as `ImageContent`: `{"type": "image", "data": "<base64>", "mimeType": "image/png"}` on `prompt`, `steer`, and `follow_up` (`docs/rpc.md:51-53`, `88-93`, `110-115`).
 
 `get_commands` returns `name`, `description`, `source` (`extension` | `prompt` | `skill`), optional `location` (`user` | `project` | `path`), and an absolute `path`. **Built-in TUI commands such as `/settings` and `/hotkeys` are excluded and would not execute if sent via `prompt`** (`docs/rpc.md:830`). The mobile client must therefore implement its own settings/hotkey surfaces rather than proxying those slash commands.
+
+## Streaming assembly
+
+**RPC deltas are provisional.** A client must start from `message_start`, assemble `text_*`, `thinking_*`, and `toolcall_*` blocks by `contentIndex`, buffer tool arguments until `toolcall_end.toolCall`, and correlate tool execution by `toolCallId`. `text_end.content` and `toolcall_end.toolCall` replace their assembled block; `message_end.message` replaces the entire provisional message and is authoritative (`docs/rpc.md:915-959`).
+
+A mobile transport must add its own sequence numbers. On a sequence gap or reconnect, it must discard provisional content and rebuild from a host snapshot or persisted entries rather than silently appending possibly incomplete deltas.
 
 ## Completion signal
 
@@ -93,11 +99,12 @@ Recommendation: use `get_entries` + `leafId` as the resync primitive after recon
 
 1. Mac-side bridge spawns `pi --mode rpc` per session, inheriting the user's environment so settings, `packages`, skills, prompts, and extensions load exactly as in the terminal (satisfies R3 by construction).
 2. Implement a strict LF-only JSONL framer with explicit `\r` stripping; never use a generic line reader. Add a fixture asserting `U+2028`/`U+2029` inside string payloads do not split records.
-3. Model completion as `agent_settled`. Track `agent_end.willRetry`, `auto_retry_*`, `compaction_*`, and `summarization_retry_*` as intermediate "still working" states so the UI does not flip to done and back.
-4. Render the four dialog methods natively (select / confirm / input / editor) and surface fire-and-forget `notify`/`setStatus`/`setWidget` as transient chips, a status line, and a widget strip.
-5. Preserve unknown event and `extension_ui_request` types verbatim in a generic inspectable representation (AGENTS.md non-negotiable), so a Pi upgrade degrades rather than breaks.
-6. Do not proxy built-in TUI slash commands; enumerate real commands with `get_commands` and build native equivalents for `/settings`-class functionality.
-7. Show an explicit, honest compatibility banner when an extension attempts `custom()`, naming the extension and offering "continue in terminal on Mac."
+3. Assemble `message_update` deltas by `contentIndex`, detect transport sequence gaps, and replace provisional state with `message_end.message`. Add interleaved thinking/text/tool fixtures whose assembled output is byte-identical to the authoritative final message.
+4. Model completion as `agent_settled`. Track `agent_end.willRetry`, `auto_retry_*`, `compaction_*`, and `summarization_retry_*` as intermediate "still working" states so the UI does not flip to done and back.
+5. Render the four dialog methods natively (select / confirm / input / editor) and surface fire-and-forget `notify`/`setStatus`/`setWidget` as transient chips, a status line, and a widget strip.
+6. Preserve unknown event and `extension_ui_request` types verbatim in a generic inspectable representation (AGENTS.md non-negotiable), so a Pi upgrade degrades rather than breaks.
+7. Do not proxy built-in TUI slash commands; enumerate real commands with `get_commands` and build native equivalents for `/settings`-class functionality.
+8. Show an explicit, honest compatibility banner when an extension attempts `custom()`, naming the extension and offering the terminal compatibility surface.
 
 ## Unresolved tradeoffs
 
