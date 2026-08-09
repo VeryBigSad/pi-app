@@ -1,0 +1,46 @@
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Android/Gradle
+.gradle/
+**/build/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+*.jks
+*.keystore
+
+# Node
+node_modules/
+coverage/
+dist/
+*.tsbuildinfo
+
+# Secrets and local runtime
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+.runtime/
+data/
+
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+.terraform.lock.hcl
+crash.log
+
+# Test artifacts
+artifacts/
+test-results/
+playwright-report/
