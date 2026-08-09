@@ -7,28 +7,28 @@ Pi version inspected: `@earendil-works/pi-coding-agent` 0.84.0 (`/opt/homebrew/l
 
 **Arbitrary Pi custom TUI cannot be reproduced remotely without PTY compatibility.** Pi's extension UI has two disjoint tiers: a structured request/response tier that survives headless operation, and a terminal-rendering tier that requires a real terminal. Any extension that draws its own component through `ctx.ui.custom()` is unavailable to a non-terminal client unless that client hosts a PTY and interprets ANSI/Kitty-protocol output.
 
-Verified from `docs/rpc.md:1155-1165`:
+Verified from `docs/rpc.md:1155-1165` and installed `dist/modes/rpc/rpc-mode.js`:
 
 - `custom()` returns `undefined` in RPC mode.
-- `setWorkingMessage()`, `setWorkingIndicator()`, `setFooter()`, `setHeader()`, `setEditorComponent()`, `setToolsExpanded()` are no-ops.
-- `getEditorText()` returns `""`; `getToolsExpanded()` returns `false`.
+- `onTerminalInput()` returns a no-op unsubscribe; `setWorkingMessage()`, `setWorkingVisible()`, `setWorkingIndicator()`, `setHiddenThinkingLabel()`, `setFooter()`, `setHeader()`, `setEditorComponent()`, `setToolsExpanded()`, and `addAutocompleteProvider()` are no-ops.
+- `getEditorText()` returns `""`; `getEditorComponent()` returns `undefined`; `getToolsExpanded()` returns `false`; readonly `theme` returns a fallback object.
 - `pasteToEditor()` degrades to `setEditorText()`.
 - `getAllThemes()` returns `[]`; `getTheme()` returns `undefined`; `setTheme()` returns `{ success: false, error: "..." }`.
 - `ctx.mode` is `"rpc"` and `ctx.hasUI` is `true`, because dialogs and fire-and-forget notifications do work. Extensions are documented to gate terminal-only features on `ctx.mode === "tui"` (`docs/extensions.md:942`, `docs/extensions.md:2897-2901`).
 
 Component contract that a PTY-free client would otherwise have to emulate (`docs/tui.md:9-29`): `render(width): string[]`, optional `handleInput(data)`, `wantsKeyRelease`, `invalidate()`, with per-line SGR/OSC 8 resets. Input relies on the Kitty keyboard protocol (`docs/terminal-setup.md:3`).
 
-Local extension census (`~/.pi/agent/settings.json` packages, files under `~/.pi/agent/npm/node_modules`) — files containing `ui.custom(`:
+Local package source census under `~/.pi/agent/npm/node_modules`:
 
-| Package | Files using `ui.custom(` |
+| Package | `ui.custom` source call sites |
 |---|---|
 | `@tintinweb/pi-subagents` | 6 |
-| `@juicesharp/rpiv-ask-user-question` | 2 |
-| `pi-mcp-adapter` | 1 |
-| `@tmustier/pi-usage-extension` | 1 |
+| `@juicesharp/rpiv-ask-user-question` | 4 |
+| `pi-mcp-adapter` | 3 |
+| `@tmustier/pi-usage-extension` | 2 |
 | `pi-memory`, `pi-web-access`, `@narumitw/pi-plan-mode`, `@narumitw/pi-goal` | 0 |
 
-Verified fact: four of eight installed packages contain custom-component code paths, so the gap is real for this user's configuration, not hypothetical. Not verified: whether each call site has a non-TUI fallback branch; per-extension behavior must be tested individually.
+The local `btw/` extension adds 1 call site. These are source call sites, not invocation paths. Pi 0.84's bundled `/llama` command is a separate inline TUI capability. Final design generates invocation-level `requiresTerminal`; RPC emits no event for `custom()`, so `/mcp`, `/usage`, `/agents`, `/btw`, `/llama`, and discovered paths pre-route.
 
 ## Verified transport facts
 
@@ -52,7 +52,7 @@ Prompt semantics worth encoding in the client state machine:
 
 ## Streaming assembly
 
-**RPC deltas are provisional.** A client must start from `message_start`, assemble `text_*`, `thinking_*`, and `toolcall_*` blocks by `contentIndex`, buffer tool arguments until `toolcall_end.toolCall`, and correlate tool execution by `toolCallId`. `text_end.content` and `toolcall_end.toolCall` replace their assembled block; `message_end.message` replaces the entire provisional message and is authoritative (`docs/rpc.md:915-959`).
+**RPC deltas are provisional.** Assemble by `contentIndex`; text/thinking end replace carried content and toolcall end replaces its tool block. In Pi 0.84 the upstream event's `partial` may contain signature/redaction, but RPC strips `partial`: `thinking_end` carries only `contentIndex` and `content`. Signature/redaction become available at authoritative `message_end.message`. `message_end.message` replaces everything and is authoritative (`docs/rpc.md:915-959` plus installed pi-ai event types).
 
 A mobile transport must add its own sequence numbers. On a sequence gap or reconnect, it must discard provisional content and rebuild from a host snapshot or persisted entries rather than silently appending possibly incomplete deltas.
 
@@ -75,13 +75,13 @@ Response shapes (`docs/rpc.md:1312-1330`): value response for `select`/`input`/`
 
 `setWidget` accepts `widgetLines: string[]` with `widgetPlacement` `"aboveEditor"` (default) or `"belowEditor"`; **component factories are ignored in RPC mode** (`docs/rpc.md:1269-1284`). `notifyType` is `"info" | "warning" | "error"`, defaulting to `"info"`.
 
-This is the load-bearing good news: a native client can render Pi's interactive approval and question flows as first-class mobile UI, with no terminal emulation, as long as it answers dialog requests by `id`.
+A native client can render ordinary extension confirmations/questions by request ID. These dialogs are not the security approval boundary; final policy uses separate `approval.offer/decision/expired` messages.
 
 ## Hosting alternatives considered
 
 | Option | Verified basis | Assessment |
 |---|---|---|
-| Spawn `pi --mode rpc` subprocess and speak JSONL | `docs/rpc.md:1-40` | Recommended. Preserves the user's real settings, packages, skills, and extension set because it is the same binary the user runs. |
+| Spawn project-pinned Pi 0.84 `--mode rpc` and speak JSONL | `docs/rpc.md:1-40` | Final choice. Preserves CLI loading/settings while applying only the reviewed final-policy patch/preload. |
 | Embed `AgentSession` / `createAgentSessionRuntime()` from the SDK | `docs/rpc.md:3`, `docs/sdk.md:46-180`, `docs/sdk.md:1097-1131` | Recommendation deferred. Gives typed in-process access and avoids a process boundary, but reimplements startup/resource-loading semantics and risks drifting from the user's CLI behavior. |
 | Run Pi on the phone under Termux | `docs/termux.md:1-98` | Rejected as the product model. Documented limitations include no image clipboard; it also moves provider credentials onto the phone, which requirement constraints forbid. |
 | Host a PTY and mirror the real TUI | `docs/tui.md:9-29`, `docs/terminal-setup.md:3` | Unresolved tradeoff, see below. |
@@ -91,9 +91,9 @@ This is the load-bearing good news: a native client can render Pi's interactive 
 - Sessions auto-save to `~/.pi/agent/sessions/`, organized by working directory, as JSONL files with a tree structure (`docs/sessions.md:7`).
 - Path layout: `~/.pi/agent/sessions/--<path>--/<timestamp>_<uuid>.jsonl`, where `<path>` is the working directory with `/` replaced by `-` (`docs/session-format.md:5-11`).
 - Entries form a tree via `id`/`parentId`, enabling in-place branching without new files. Current version is 3; v1 (linear) and v2 (tree) auto-migrate on load. v3 renamed the `hookMessage` role to `custom` (`docs/session-format.md:3`, `21-27`).
-- `get_entries` accepts `since` and returns `leafId` — `null` for an empty session — so one round trip reveals whether the active branch moved. An unrecognized `since` yields `success: false` (`docs/rpc.md:722`).
+- `get_entries` accepts an append-order entry ID as `since` and separately returns active-branch `leafId`—`null` when empty. Because branching can move the leaf behind later off-branch appends, validation records the final returned append ID and never uses leaf as `since`. An unrecognized `since` yields `success: false` (`docs/rpc.md:722`).
 
-Recommendation: use `get_entries` + `leafId` as the resync primitive after reconnect, and treat the session tree as the source of truth rather than the client's event log.
+Final recovery uses one canonical `get_entries`+leaf response per idle snapshot attempt. The actor blocks mutations, tags runtime queries as cursor adjuncts, verifies the eight-hex/null leaf again, retries the whole attempt if changed, then replays post-fence events. Active gaps expose no provisional transcript as canonical.
 
 ## Recommendations
 
@@ -104,11 +104,11 @@ Recommendation: use `get_entries` + `leafId` as the resync primitive after recon
 5. Render the four dialog methods natively (select / confirm / input / editor) and surface fire-and-forget `notify`/`setStatus`/`setWidget` as transient chips, a status line, and a widget strip.
 6. Preserve unknown event and `extension_ui_request` types verbatim in a generic inspectable representation (AGENTS.md non-negotiable), so a Pi upgrade degrades rather than breaks.
 7. Do not proxy built-in TUI slash commands; enumerate real commands with `get_commands` and build native equivalents for `/settings`-class functionality.
-8. Show an explicit, honest compatibility banner when an extension attempts `custom()`, naming the extension and offering the terminal compatibility surface.
+8. Do not wait for a `custom()` event: none exists. Generate invocation-level routing, pre-route known custom paths, and use only a generic bounded watchdog/restart/resync for drift.
 
-## Unresolved tradeoffs
+## Resolved tradeoffs
 
-- **PTY mirroring.** A hosted PTY plus an ANSI/Kitty-capable mobile renderer would achieve literal 100% extension fidelity, at the cost of a second rendering pipeline, touch-hostile keyboard semantics, and a large security/complexity surface. Decision deferred to architecture; the fallback banner is the minimum acceptable behavior.
-- **Subprocess vs embedded SDK.** Not yet decided; subprocess is favored for fidelity, SDK for typing and lifecycle control.
-- **Bash streaming volume.** `bash_execution_update` and `tool_execution_update` can be high-rate. Whether the Mac bridge coalesces before transmit or the phone coalesces before render is unresolved and interacts with the performance budget in `mobile-ux.md`.
-- **Per-extension fallback quality.** The four packages with `custom()` call sites need individual integration scenarios before R3 can be claimed.
+- PTY terminal compatibility is mandatory but secondary to native semantic UI.
+- Real CLI subprocess remains primary. The project preload exists because extensions can create nested in-process AgentSessions.
+- High-rate output is losslessly coalesced before frame-cadence UI publication with bounded backpressure.
+- Every package/local/bundled command gets semantic and PTY scenarios; source count alone is never capability proof.

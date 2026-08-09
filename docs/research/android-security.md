@@ -49,22 +49,24 @@ Statement file, hosted on the same sign-in / RP domain:
   ```
 
   The `asset_statements` include pointing at the hosted DAL file is documented as required specifically for **password** credential sharing; passkeys still require DAL setup.
-- **Platform floor:** Credential Manager passkey creation requires Digital Asset Links and Android 9 / API 28+.
+- **Credential fact:** Credential Manager passkey creation supports Android 9 / API 28+ with DAL. **Product decision differs:** Pi Mobile requires platform TLS 1.3, absent on API 28, so `minSdk` is 29.
 - **Validation:** use Google's Digital Asset Links API against the host, and separately test App Link verification and on-device state.
 
-Bitwarden compatibility is a consequence of standards conformance rather than a vendor integration: because Credential Manager brokers third-party credential providers, a correctly configured RP and WebAuthn ceremony is what makes Bitwarden usable. Not verified in this round: Bitwarden's current Android provider behavior for this specific RP configuration. That requires a manual device test and must not be assumed.
+Provider support is version-dependent. On Android 13 and earlier, Jetpack Credential Manager passkeys are backed by Google Password Manager through `credentials-play-services-auth`; Android 14+ aggregates enabled third-party providers. Therefore API 29–33 production auth requires current Play services, while Android 14+ can select Bitwarden. A no-Google AOSP image has no provider by default and stays locked outside debug-only fake-auth tests. Sources: [Credential Manager FAQ](https://developer.android.com/identity/sign-in/credential-manager-faq), [Android 14 features](https://developer.android.com/about/versions/14/features), and [credential provider integration](https://developer.android.com/identity/sign-in/credential-provider).
+
+Bitwarden compatibility remains a standards-conformance expectation, not a verified vendor integration for this RP. It requires a release-signed physical Android 14+ test and must not be assumed.
 
 ## Debug vs release signing pitfall
 
-Debug builds and release builds have different signing certificates, so the `sha256_cert_fingerprints` array must include every fingerprint in use: the local debug keystore, any CI-generated key, and the Play app-signing certificate if distribution goes through Play. A single-fingerprint file is the most likely cause of "passkey works for me, fails on your build" reports. AGENTS.md already forbids committing signing keys, so the fingerprint list must be sourced from a documented runbook rather than a checked-in keystore.
+Debug and release certificates differ. Generic DAL can list several fingerprints, but Pi Mobile production deliberately lists only the dedicated release signer; debug uses a different application ID/local verifier and cannot authenticate to production. Any future signer overlap is time-bounded and generated from signed artifacts, never from a committed keystore.
 
 ## Threat model implications for R7
 
-Requirement R7 asks for TLS plus application-layer end-to-end encryption, replay resistance, revocation, and key storage. Research-level conclusions:
+R7 requires end-to-end protection independent of relay TLS, replay resistance, revocation, and key storage. Conclusions:
 
 - Passkey authentication proves *who is opening the app*. It does not by itself authenticate the *device-to-Mac channel*. A separate pairing credential is needed so the Mac can authorize a specific phone and revoke it later.
-- Because any relay is required to be content-blind (R10), transport TLS is insufficient by itself; payloads need an application-layer envelope whose keys never reach the relay.
-- Replay resistance needs monotonic sequencing or nonces at the envelope layer, not merely at the TLS layer, since a relay can reorder or re-deliver frames.
+- Outer WSS ends at relay and is insufficient; standard inner TLS 1.3 is the end-to-end application tunnel whose keys never reach relay.
+- Inner TLS rejects record replay/reorder; application epochs/sequences and durable command IDs/hashes handle semantic reconnect replay.
 - Key material belongs in hardware-backed storage on the phone; the Mac side holds its half outside the repository. Pi provider credentials and `~/.groq_key` never leave the Mac per project constraints.
 - Logs must redact prompts, tool data, credentials, audio, and ciphertext keys by default (AGENTS.md local policy), which the mobile client must honor including in crash reports.
 
@@ -73,12 +75,12 @@ Requirement R7 asks for TLS plus application-layer end-to-end encryption, replay
 1. Treat the public RP host as an authentication-only dependency: it serves `.well-known/assetlinks.json` and the WebAuthn ceremony, and never sees session plaintext.
 2. Automate `assetlinks.json` generation from the actual signing configuration and add a CI check that fetches the deployed file, asserts HTTP 200, `application/json`, no redirect, and that the expected fingerprints are present.
 3. Keep passkey authentication and device pairing as two distinct credentials with independent revocation paths.
-4. Enforce API 28+ as the floor for passkey flows; if a lower `minSdk` is ever chosen, define an explicit non-bypass fallback rather than a debug-style shortcut, because production auth bypasses are forbidden.
+4. Enforce API 29 as product floor for platform TLS 1.3; API 28 remains unsupported. Require Play services for passkeys on API 29–33, permit compatible third-party providers on API 34+, and never add an auth fallback.
 5. Write the manual Bitwarden verification runbook now, since it cannot be automated in CI.
 
-## Unresolved tradeoffs
+## Final project decisions and residual risk
 
-- **RP hosting choice.** A static object-storage site plus CDN is the cheapest way to satisfy the DAL requirements, but the WebAuthn ceremony itself needs some server-side verification. Whether that runs as a tiny always-on service or a scheduled/serverless endpoint is undecided and directly affects the R10 cost story.
-- **Domain ownership.** The RP domain must be stable for the lifetime of every issued passkey; changing it invalidates credentials. No domain has been selected.
-- **Play App Signing.** If distribution stays sideloaded, the Play fingerprint never applies; if it later moves to Play, the fingerprint set must be updated before release or existing passkeys break.
-- **Pairing bootstrap UX.** QR-based pairing, short-code pairing, and out-of-band key entry differ substantially in phishing resistance; not yet evaluated.
+- RP is `verybigsad.github.io`; Pages serves DAL only and Mac verifies WebAuthn. DAL includes both `get_login_creds` and `handle_all_urls`.
+- Pairing is CSR-first QR-pinned provisional server-auth TLS; first owner registers, later devices assert; challenge binds invitation/exporter/CSR; local short-code confirmation precedes certificate; mTLS starts afterward.
+- Distribution is dedicated sideload signing for 1.0. A later Play move requires an explicit signer/origin/DAL migration.
+- Pages compromise can hijack App Links or deny association; release-key compromise can produce the exact Android origin Mac pins. Mac never learns origins from DAL, CI cross-checks the signed APK, and key rotation overlaps fingerprints, but hosting/signing remain residual risks until real key/repo evidence exists.

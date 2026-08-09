@@ -32,13 +32,23 @@ dist/
 .runtime/
 data/
 
-# Terraform
+# Terraform: ignore state, plans, caches and variable files.
+# The dependency lock file is intentionally NOT ignored: committing it pins
+# provider versions and checksums, which is a supply-chain security property.
 **/.terraform/
+!**/.terraform.lock.hcl
 *.tfstate
 *.tfstate.*
 *.tfplan
-.terraform.lock.hcl
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
 crash.log
+crash.*.log
 
 # Test artifacts
 artifacts/

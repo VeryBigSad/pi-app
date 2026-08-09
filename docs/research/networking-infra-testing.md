@@ -4,7 +4,7 @@ Last updated: 2026-08-09
 
 ## Decisive constraints
 
-1. **A background socket is not a reliable push mechanism.** Downstream wakeups must come from FCM; sockets are for short, foreground-visible work windows.
+1. **A background socket is not reliable push.** Pi Mobile uses UnifiedPush with self-hosted ntfy as Google-independent primary; FCM is optional only. Foreground sockets remain short-lived.
 2. **Groq transcription is batch-only.** There is no documented streaming transcription parameter, so "realtime voice" must be built from sequential short chunks.
 
 Both constraints are load-bearing: they determine the notification architecture and the voice UX respectively.
@@ -27,9 +27,7 @@ Verified facts:
 - Apps targeting API 34+ must declare the FGS type and the type-specific permission.
 - Android 15 / API 35 caps `dataSync` FGS instances at **6 total hours per 24 hours** while backgrounded, with `Service.onTimeout()` required and prompt stopping. A permanent socket maintained under `dataSync` is therefore an unsuitable design.
 
-Recommended architecture, per the same sources: backend → high-priority FCM only for urgent user-visible events → notification or expedited work → short authenticated HTTPS or WebSocket fetch for state → disconnect. Normal-priority FCM plus WorkManager covers silent syncs.
-
-Project-specific consequence: the Mac bridge observes `agent_settled` (see `pi-integration.md`) and requests a high-priority FCM send for completion and for blocking dialog requests. The phone's live socket exists only while the session UI is foreground, or briefly after a wake, and reconnect performs catch-up via `get_entries since` + `leafId`. R8's requirement to document delivery limits is satisfied by recording the Doze, priority-downgrade, and 6-hour `dataSync` facts above.
+Those sources explain why a permanent app socket/FGS is rejected. Project decision is Mac `agent_settled` or blocking input → opaque UnifiedPush wake through self-hosted ntfy → authenticated catch-up; optional FCM can implement the same wake interface but cannot block build/release. App-open catch-up is authoritative. Installed no-Google API 34 lanes are `PiApp_API_34_AOSP_UI` (default image for UI/notification tests) and `PiApp_API_34_AOSP` (headless AOSP ATD for transport). Both need debug-only fake auth because no credential provider is bundled; only physical Android 14+ with Bitwarden can prove the full production no-Google path.
 
 ## Voice: Groq `whisper-large-v3-turbo`
 
@@ -45,15 +43,17 @@ Verified facts:
 
 - Groq positions the model for real-time transcription, but the documented `/openai/v1/audio/transcriptions` request parameters do **not** include `stream`. It accepts an uploaded file or a `url` and returns a completed transcript. True partial-token/SSE transcription streaming is not documented or supported for this endpoint. Live audio must be sent as short sequential chunks and stitched client-side.
 - File size: 25 MB on Free, 100 MB on Dev. Direct attachments cap at 25 MB; larger media must use the `url` parameter or be chunked.
-- Duration: minimum accepted audio 0.01 s; minimum billed duration 10 s. The model is optimized for 30-second segments, so roughly 10-30 s overlapping chunks give the lowest-latency streaming-like behavior.
+- Duration/pricing: minimum accepted audio 0.01 s; minimum billed duration 10 s; turbo is currently `$0.04` per billed audio hour. The model is optimized for 30-second segments, so roughly 10-30 s overlapping chunks give the lowest-latency streaming-like behavior.
 - Formats: `flac`, `mp3`, `mp4`, `mpeg`, `mpga`, `m4a`, `ogg`, `wav`, `webm`. Only the first track of a multi-track file is transcribed.
 - Rate limits (Free): 20 RPM, 2,000 RPD, 7,200 audio seconds/hour, 28,800 audio seconds/day, organization-wide. Dev-plan listings show 400 RPM / 400K audio seconds per hour for turbo.
 - Capabilities: multilingual, 99+ languages, **transcription only** — unlike `whisper-large-v3`, turbo does not support audio translation.
 
 Project consequences:
 
-- The 10 s minimum billed duration penalizes very short chunks; chunk sizing is an explicit cost/latency tradeoff, not a free parameter.
-- Overlapping chunks require de-duplication at seams; ordering must be preserved because R9 demands ordered partial text.
+- No one quota is always binding. A durable pre-send ledger enforces conservative 90% defaults for all published Free windows: 18 RPM, 1,800 RPD, 6,480 audio seconds/hour, and 25,920/day. Encoded overlap and every retry attempt count.
+- Every sub-10 s attempt rounds up to 10 billed seconds. `billedSeconds / 3600 × $0.04` is displayed as an upper bound and hard-capped by default at `$0.25`/UTC day and `$2`/UTC month.
+- 429 handling honors valid `Retry-After` up to 120 s, otherwise uses full-jitter exponential delay (1 s base, 30 s cap), with three retries after the initial attempt. A longer server delay stops without retrying early.
+- Overlapping chunks require de-duplication at seams; ordering and duplicate suppression must hold under retry.
 - The key stays on the Mac (`~/.groq_key`, present locally, 57 bytes, never committed), so audio flows phone → Mac → Groq and text returns the same way. The phone never holds the key.
 - No translation support means language handling is transcribe-only; any translation feature would need a different model.
 
@@ -87,7 +87,7 @@ Important nuance recorded verbatim from the research: a relay is a fallback, not
 
 Note: the surveyed comparison was framed around iPhone/macOS clients; the mechanisms are platform-independent but the Android client story must be validated separately.
 
-Project consequence: the app must not assume a VPN is present. R10 asks for direct/local operation where feasible plus a minimal, Terraform-managed, content-blind relay. The relay therefore carries opaque frames and the application-layer envelope from `android-security.md` provides confidentiality regardless of which path is used.
+Project consequence: no VPN assumption. Direct LAN uses mTLS; remote relay byte-splices one-use WSS data sockets carrying inner TLS 1.3, so confidentiality is independent of relay outer WSS.
 
 ## Infrastructure
 
@@ -98,17 +98,17 @@ Any created cloud resource is Terraform-managed per AGENTS.md, with documented c
 Derived from the verified facts above; R11 enumerates the required suites.
 
 - **Protocol contract:** LF-only JSONL framing fixtures including `U+2028`/`U+2029` inside JSON strings; unknown event and `extension_ui_request` types preserved; `agent_end willRetry` vs `agent_settled` sequencing.
-- **Notification:** high-priority FCM path with `getPriority()` assertions, downgrade handling that avoids `ForegroundServiceStartNotAllowedException`, Doze-window behavior, and `Service.onTimeout()` for any `dataSync` usage.
-- **Voice:** chunk boundary stitching, ordering under out-of-order responses, overlap de-duplication, 25 MB and rate-limit rejection paths, unsupported-format rejection, and the 10 s minimum-billed-duration cost assertion.
-- **Transport/fault:** direct path, relayed path, mid-stream network loss, and reconnect catch-up via `get_entries since` + `leafId`.
+- **Notification:** UnifiedPush registration/opaque ntfy payload, distributor absence, app-open catch-up, default-image/AOSP-ATD no-Google lanes with debug fake auth, Doze/OEM physical behavior; optional FCM priority/downgrade tests stay non-blocking.
+- **Voice:** chunk stitching/order/dedupe; 25 MB/format failures; durable RPM/RPD/ASH/ASD boundaries; 429 header/jitter/retry exhaustion; encoded overlap/retry billing; daily/monthly budget rollover.
+- **Transport/fault:** direct path, relayed path, mid-stream network loss, and reconnect catch-up via append-order `get_entries since` plus independent `leafId` validation, including backward branch moves.
 - **Security:** deployed `assetlinks.json` fetch assertions, replay rejection, revocation, and log redaction.
 - **Performance:** Macrobenchmark `FrameTimingMetric` on a release build with Baseline Profile, per `mobile-ux.md`.
 - **Manual:** emulator/device passkey ceremony with Bitwarden, real voice capture, and backgrounded completion notification.
 
-## Unresolved tradeoffs
+## Final choices
 
-- **Notification content vs privacy.** Specific notification text ("Tests failed") is better UX but leaks session detail to the lockscreen and to FCM. Whether FCM payloads carry only an opaque wake signal, with text fetched after unlock, is undecided.
-- **Chunk length.** 10-30 s chunks trade latency against the 10 s minimum billed duration and RPM limits; the operating point is unchosen.
-- **VPN vs relay as the default path.** Requiring Tailscale/Headscale improves latency and reduces server cost but adds user setup; a relay-first default is simpler but slower and needs an always-on host.
-- **Relay vs RP consolidation.** Merging the passkey RP and the relay into one host is cheaper; keeping them separate reduces blast radius. Not decided.
-- **Free vs Dev Groq plan.** Free-tier 20 RPM and 7,200 audio seconds/hour may be tight for habitual voice use; plan selection is deferred.
+- Push is opaque wake only; detail is fetched and rendered after unlock.
+- VAD prefers 8 s and forces 12 s, one request in flight/two queued.
+- App needs no VPN: direct LAN is opportunistic; remote uses standing Mac control WSS plus one-use data rendezvous and inner TLS.
+- GitHub Pages serves RP/DAL; one YC VM hosts relay+ntfy. Relay persists only route public keys/revocation.
+- Free/Dev Groq plan remains operational, but the app defaults to conservative Free RPM/RPD/ASH/ASD values and requires explicit current limits to raise them.

@@ -19,10 +19,10 @@ Verified distinction: Codex's documented mobile experience is artifact-rich and 
 
 1. **Session inbox, not a terminal.** Buckets: Working / Needs you / Ready to review / Done. One-line latest activity per row plus a conspicuous blocker badge. Maps directly to Pi state: streaming, pending `extension_ui_request` dialog, settled with edits, settled clean.
 2. **Milestone timeline over raw token firehose.** Stream meaningful milestones ("searched 12 files", "edited auth.ts", "tests running", "awaiting approval"); keep verbose logs behind an expandable event. This is also the performance lever.
-3. **Interruptible, steerable execution.** Persistent composer plus quick replies: Approve, Continue, Stop, Change approach, Ask for summary. Stop must remain visible whenever the agent is running. Maps to Pi `steer` / `follow_up` / `abort`.
+3. **Interruptible, steerable execution.** Persistent composer plus Continue, Stop, Change approach, and Summarize. Final security review rejects generic Approve; Allow once appears only for a bound broker offer. Maps to Pi `steer` / `follow_up` / `abort`.
 4. **Diff review as a checkpoint, progressive disclosure.** Change summary and risk/test status first, then file list, then a touch-friendly unified diff. Never open into a dense full-repo diff.
 5. **Separate execution from device control.** Label the runtime target explicitly, e.g. "Running on MacBook Pro · local repo · main worktree", and place permission scope next to every destructive approval.
-6. **Notification content is specific.** "Tests failed" or "Approval needed", never a vague "Agent update."
+6. **Notification content is locally specific after unlock.** Push itself is opaque; authenticated catch-up may render "Tests failed" or "Approval needed" under the chosen lock-screen privacy level.
 
 Recommended mobile flow: push notification → session landing (status, current step, elapsed time, branch/worktree, 2-3 line summary) → evidence cards (tests, screenshots, commands, changed-file count; tap to expand) → review mode (summary → files → hunks, with comment / request changes / approve / open on desktop) → collapse the reviewed diff into a durable event and resume streaming.
 
