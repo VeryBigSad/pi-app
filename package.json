@@ -18,7 +18,7 @@
     "mac/compatibility"
   ],
   "scripts": {
-    "build": "npm run terminal:build && npm run build --workspaces --if-present",
+    "build": "npm run terminal:build && tsc -b && npm run build --workspaces --if-present",
     "terminal:build": "node scripts/build-terminal.mjs",
     "terminal:verify": "node scripts/build-terminal.mjs && git diff --exit-code -- android/terminal/src/main/assets/terminal android/terminal/web/asset-manifest.json",
     "check": "npm run lint && npm run typecheck && npm test",
