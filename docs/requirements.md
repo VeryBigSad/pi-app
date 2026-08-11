@@ -138,8 +138,7 @@ Reproducible builds use ADR-0019, wrapper checksum, catalogs/locks, exact Pi 0.8
 | Gap | Requirements affected | Substitute and its weakness |
 |---|---|---|
 | No physical Android device | R6 Bitwarden, R7 hardware key, R5 timing, R9 microphone, R8 Doze/OEM, R4 input | API 29/34/36 Google APIs plus API 34 default/AOSP ATD, fake auth/audio, adb Doze; none prove physical/provider/OEM behavior |
-| No public `VeryBigSad/verybigsad.github.io` repository or live DAL | R6, R10 | Hosting pattern verified against a production GitHub Pages host serving `assetlinks.json` correctly; the deployment itself does not exist |
-| No dedicated release signing key | R6, R12 | No substitute; also leaves DAL/signer compromise and overlap-rotation controls unverified |
+| Release-key backup/cross-check incomplete | R6, R12 | Dedicated mode-0600 EC keystore + Keychain exists; local signed APK matches DAL; Bitwarden/off-machine backup and rotation drill absent |
 | No Firebase credentials, by design | R8 optional adapter | Planned fake-distributor tests; live FCM never a release gate |
 | No cloud resource created | R10 | Local containers for relay and ntfy until Stage 5 |
 | Sleeping or offline Mac | R1, R6, R8 | Nothing runs, no fresh assertion, no wake; this is inherent, not a defect |

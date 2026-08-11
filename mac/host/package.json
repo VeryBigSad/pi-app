@@ -3,7 +3,28 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": { "pi-mobile-host": "dist/cli.js" },
-  "scripts": { "build": "tsc -b", "test": "vitest run test" },
-  "dependencies": { "@pimobile/protocol": "0.1.0" }
+  "bin": {
+    "pi-mobile-host": "dist/src/cli.js",
+    "pi-mobile-smoke": "dist/src/smoke-pi.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --root ../.. mac/host/test"
+  },
+  "dependencies": {
+    "@peculiar/x509": "1.14.3",
+    "@pimobile/approval": "0.1.0",
+    "@pimobile/compatibility": "0.1.0",
+    "@pimobile/pi-patch": "0.1.0",
+    "@pimobile/preload": "0.1.0",
+    "@pimobile/protocol": "0.1.0",
+    "@simplewebauthn/server": "13.3.2",
+    "better-sqlite3": "13.0.3",
+    "node-pty": "1.2.0-beta.15",
+    "qrcode": "1.5.4",
+    "ws": "8.21.3"
+  },
+  "devDependencies": {
+    "@types/ws": "8.18.1"
+  }
 }

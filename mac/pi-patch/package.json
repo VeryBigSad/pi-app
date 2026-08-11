@@ -3,5 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "scripts": { "build": "tsc -b", "test": "vitest run test" }
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": { "pi-mobile-patch": "dist/index.js" },
+  "dependencies": { "@earendil-works/pi-coding-agent": "0.84.0" },
+  "scripts": { "build": "tsc -b", "test": "vitest run --root ../.. mac/pi-patch/test" }
 }

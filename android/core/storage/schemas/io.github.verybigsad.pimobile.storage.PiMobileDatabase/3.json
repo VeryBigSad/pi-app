@@ -1,0 +1,394 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 3,
+    "identityHash": "c0857a36f17eb9546b0fc3f55daad459",
+    "entities": [
+      {
+        "tableName": "sessions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`sessionId` TEXT NOT NULL, `cwd` TEXT NOT NULL, `displayName` TEXT, `provider` TEXT NOT NULL, `modelId` TEXT NOT NULL, `thinkingLevel` TEXT NOT NULL, `updatedAtEpochMs` INTEGER NOT NULL, `canonical_stream_epoch` TEXT, `canonical_sequence` TEXT, `canonical_leaf_id` TEXT, `canonical_last_append_id` TEXT, PRIMARY KEY(`sessionId`))",
+        "fields": [
+          {
+            "fieldPath": "sessionId",
+            "columnName": "sessionId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cwd",
+            "columnName": "cwd",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "displayName",
+            "columnName": "displayName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "provider",
+            "columnName": "provider",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "modelId",
+            "columnName": "modelId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "thinkingLevel",
+            "columnName": "thinkingLevel",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtEpochMs",
+            "columnName": "updatedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "canonicalCursor.streamEpoch",
+            "columnName": "canonical_stream_epoch",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "canonicalCursor.sequence",
+            "columnName": "canonical_sequence",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "canonicalCursor.leafId",
+            "columnName": "canonical_leaf_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "canonicalCursor.lastAppendId",
+            "columnName": "canonical_last_append_id",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "sessionId"
+          ]
+        }
+      },
+      {
+        "tableName": "messages",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`sessionId` TEXT NOT NULL, `messageId` TEXT NOT NULL, `parentId` TEXT, `appendOrder` TEXT NOT NULL, `appendId` TEXT, `role` TEXT NOT NULL, `state` TEXT NOT NULL, `contentJson` TEXT NOT NULL, `final_source` TEXT NOT NULL, `final_raw_json` TEXT, `final_raw_ref` TEXT, `final_raw_size_bytes` INTEGER NOT NULL, `final_raw_sha256` TEXT NOT NULL, `final_projection_json` TEXT NOT NULL, `final_signature` TEXT, `final_redacted` INTEGER NOT NULL, `final_created_at_epoch_ms` INTEGER NOT NULL, `final_finalized_at_epoch_ms` INTEGER NOT NULL, PRIMARY KEY(`sessionId`, `messageId`), FOREIGN KEY(`sessionId`) REFERENCES `sessions`(`sessionId`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "sessionId",
+            "columnName": "sessionId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "messageId",
+            "columnName": "messageId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "parentId",
+            "columnName": "parentId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "appendOrder",
+            "columnName": "appendOrder",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "appendId",
+            "columnName": "appendId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "role",
+            "columnName": "role",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentJson",
+            "columnName": "contentJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "authoritativeFinal.source",
+            "columnName": "final_source",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "authoritativeFinal.rawJson",
+            "columnName": "final_raw_json",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "authoritativeFinal.rawRef",
+            "columnName": "final_raw_ref",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "authoritativeFinal.rawSizeBytes",
+            "columnName": "final_raw_size_bytes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "authoritativeFinal.rawSha256",
+            "columnName": "final_raw_sha256",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "authoritativeFinal.projectionJson",
+            "columnName": "final_projection_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "authoritativeFinal.signature",
+            "columnName": "final_signature",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "authoritativeFinal.redacted",
+            "columnName": "final_redacted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "authoritativeFinal.createdAtEpochMs",
+            "columnName": "final_created_at_epoch_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "authoritativeFinal.finalizedAtEpochMs",
+            "columnName": "final_finalized_at_epoch_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "sessionId",
+            "messageId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_messages_sessionId",
+            "unique": false,
+            "columnNames": [
+              "sessionId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_messages_sessionId` ON `${TABLE_NAME}` (`sessionId`)"
+          },
+          {
+            "name": "index_messages_sessionId_appendOrder",
+            "unique": true,
+            "columnNames": [
+              "sessionId",
+              "appendOrder"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_messages_sessionId_appendOrder` ON `${TABLE_NAME}` (`sessionId`, `appendOrder`)"
+          },
+          {
+            "name": "index_messages_sessionId_appendId",
+            "unique": true,
+            "columnNames": [
+              "sessionId",
+              "appendId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_messages_sessionId_appendId` ON `${TABLE_NAME}` (`sessionId`, `appendId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "sessions",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "sessionId"
+            ],
+            "referencedColumns": [
+              "sessionId"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "command_receipts",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`commandId` TEXT NOT NULL, `sessionId` TEXT NOT NULL, `state` TEXT NOT NULL, `resultDigest` TEXT, `updatedAtEpochMs` INTEGER NOT NULL, PRIMARY KEY(`commandId`))",
+        "fields": [
+          {
+            "fieldPath": "commandId",
+            "columnName": "commandId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sessionId",
+            "columnName": "sessionId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "resultDigest",
+            "columnName": "resultDigest",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "updatedAtEpochMs",
+            "columnName": "updatedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "commandId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_command_receipts_sessionId",
+            "unique": false,
+            "columnNames": [
+              "sessionId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_command_receipts_sessionId` ON `${TABLE_NAME}` (`sessionId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "drafts",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`sessionId` TEXT NOT NULL, `typedText` TEXT NOT NULL, `transcriptionText` TEXT, `revision` INTEGER NOT NULL, `updatedAtEpochMs` INTEGER NOT NULL, PRIMARY KEY(`sessionId`))",
+        "fields": [
+          {
+            "fieldPath": "sessionId",
+            "columnName": "sessionId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "typedText",
+            "columnName": "typedText",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "transcriptionText",
+            "columnName": "transcriptionText",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtEpochMs",
+            "columnName": "updatedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "sessionId"
+          ]
+        }
+      },
+      {
+        "tableName": "trust_states",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`macId` TEXT NOT NULL, `status` TEXT NOT NULL, `displayName` TEXT, `certificateSerial` TEXT, `certificateNotAfterEpochMs` INTEGER, `revokedAtEpochMs` INTEGER, `revocationReasonCode` TEXT, `updatedAtEpochMs` INTEGER NOT NULL, PRIMARY KEY(`macId`))",
+        "fields": [
+          {
+            "fieldPath": "macId",
+            "columnName": "macId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "displayName",
+            "columnName": "displayName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "certificateSerial",
+            "columnName": "certificateSerial",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "certificateNotAfterEpochMs",
+            "columnName": "certificateNotAfterEpochMs",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "revokedAtEpochMs",
+            "columnName": "revokedAtEpochMs",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "revocationReasonCode",
+            "columnName": "revocationReasonCode",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "updatedAtEpochMs",
+            "columnName": "updatedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "macId"
+          ]
+        }
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'c0857a36f17eb9546b0fc3f55daad459')"
+    ]
+  }
+}

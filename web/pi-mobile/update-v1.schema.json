@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://verybigsad.github.io/pi-mobile/update-v1.schema.json",
+  "title": "Pi Mobile assisted self-update feed (schemaVersion 1)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "channel", "packageName", "versionCode", "versionName", "publishedAt", "releasePageUrl", "apk"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "channel": { "type": "string", "minLength": 1, "maxLength": 32 },
+    "packageName": { "const": "io.github.verybigsad.pimobile" },
+    "versionCode": { "type": "integer", "minimum": 1 },
+    "versionName": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "publishedAt": { "type": "string", "format": "date-time" },
+    "releasePageUrl": { "type": "string", "pattern": "^https://", "maxLength": 2048 },
+    "apk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "sizeBytes", "sha256", "certificateSha256"],
+      "properties": {
+        "url": { "type": "string", "pattern": "^https://", "maxLength": 2048 },
+        "sizeBytes": { "type": "integer", "minimum": 1, "maximum": 536870912 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "certificateSha256": {
+          "type": "string",
+          "pattern": "^([0-9A-F]{2}:){31}[0-9A-F]{2}$",
+          "description": "SHA-256 of the release signing certificate; must equal the compile-time pin"
+        }
+      }
+    }
+  }
+}

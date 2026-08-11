@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "errors": [
+    {"code": "UNSUPPORTED_VERSION", "closeConnection": true},
+    {"code": "PROTOCOL_VIOLATION", "closeConnection": true},
+    {"code": "FRAME_TOO_LARGE", "closeConnection": true},
+    {"code": "RESOURCE_EXHAUSTED", "closeConnection": true},
+    {"code": "AUTH_REQUIRED", "closeConnection": false},
+    {"code": "AUTH_FAILED", "closeConnection": true},
+    {"code": "PAIRING_PHASE_REQUIRED", "closeConnection": false},
+    {"code": "REVOKED", "closeConnection": true},
+    {"code": "SEQUENCE_GAP", "closeConnection": false},
+    {"code": "SYNC_REQUIRED", "closeConnection": false},
+    {"code": "SNAPSHOT_WAITING_FOR_IDLE", "closeConnection": false},
+    {"code": "SNAPSHOT_LEAF_CHANGED", "closeConnection": false},
+    {"code": "COMMAND_ID_REUSE", "closeConnection": true},
+    {"code": "COMMAND_DORMANT", "closeConnection": false},
+    {"code": "COMMAND_INDETERMINATE", "closeConnection": false},
+    {"code": "JOURNAL_UNAVAILABLE", "closeConnection": false},
+    {"code": "APPROVAL_DENIED", "closeConnection": false},
+    {"code": "APPROVAL_EXPIRED", "closeConnection": false},
+    {"code": "BROKER_UNAVAILABLE", "closeConnection": false},
+    {"code": "SESSION_LEASE_CONFLICT", "closeConnection": false},
+    {"code": "STREAM_INVALID", "closeConnection": false},
+    {"code": "BLOB_NOT_READY", "closeConnection": false},
+    {"code": "BLOB_INVALID", "closeConnection": false},
+    {"code": "TERMINAL_RESET_REQUIRED", "closeConnection": false}
+  ]
+}

@@ -1,6 +1,6 @@
 # Pi Mobile application protocol v1
 
-Last updated: 2026-08-09
+Last updated: 2026-08-11
 Status: prose contract frozen; executable schemas and cross-language fixtures in progress
 
 This protocol runs inside TLS 1.3. Normal data connections require mTLS. Pairing alone runs in `PAIRING_PROVISIONAL` over inner server-auth TLS pinned by the QR and cannot access sessions or mutations. Remotely, a standing Mac control WSS lets the relay summon a one-use outbound Mac data WSS to pair with Android; locally the inner stream runs directly over TCP. WebSocket boundaries have no protocol meaning.
@@ -40,7 +40,10 @@ Readers must tolerate arbitrary fragmentation/coalescing. Invalid magic, major, 
 | Outbound queue per connection | 512 frames or 8 MiB |
 | Prompt image decoded total | 8 MiB |
 | Connected xterm scrollback | 5,000 lines; not restored after reconnect |
-| Bounded tmux history response | 5,000 lines and 1 MiB, lower limit wins |
+| Terminal history response | 5,000 entries and 1 MiB, lower limit wins |
+| Voice JSON message body (`voice.audio`, `voice.partial`, `voice.finish`) | 64 KiB |
+| Voice transcript text (`voice.partial`, `voice.finish`) | 16,384 characters |
+| Agent insights per session (`agents.catalog`) | 256 agents; description 256 characters |
 | Finalized semantic messages retained in memory | 500 |
 
 The lower applicable bound wins. Length is checked before allocation. Queue exhaustion never drops authoritative semantic data: producer flow control applies for at most 10 seconds, then the connection closes with `RESOURCE_EXHAUSTED` if progress cannot resume. Terminal frames may be superseded only after an explicit `terminal.reset`; audio stops visibly rather than buffering without bound.
@@ -61,6 +64,8 @@ A JSON `stream.open` must precede data and defines `streamId`, `purpose`, media 
 `TERMINAL_BYTES` starts with two unsigned 64-bit big-endian fields: `terminalGeneration` and `sequence`, followed by bytes. Terminal sequences are contiguous per direction. A gap forces `terminal.reset` and tmux redraw; input is never replayed.
 
 Audio v1 is signed 16-bit little-endian, 16 kHz, mono PCM. Any other format requires a negotiated future minor version.
+
+Alongside the binary PCM frames, JSON voice messages are session-scoped and ordered by `chunkSequence` (canonical uint64 decimal text): `voice.audio {sessionId, chunkSequence, final}` marks audio chunk boundaries, `voice.partial {sessionId, chunkSequence, revision, text}` carries a revisable partial transcript, and `voice.finish {sessionId, chunkSequence, text}` carries the final transcript. Voice JSON bodies are bounded to 64 KiB and transcript text to 16,384 characters.
 
 ## Durable quotas and retention
 
@@ -117,15 +122,19 @@ Connection phases are `PAIRING_PROVISIONAL`, `NEGOTIATING`, `DEVICE_AUTHENTICATE
 |---|---|
 | Control | `client.hello`, `server.hello`, `ping`, `pong`, `error`, `close` |
 | Pairing/authentication | `pair.begin`, `pair.csr`, `auth.registration.options`, `auth.registration.response`, `auth.assertion.options`, `auth.assertion.response`, `auth.result`, `auth.lock`, `pair.confirm`, `pair.result` |
-| Sync | `sync.resume`, `sync.replay`, `sync.reset`, `snapshot.waiting`, `snapshot.begin`, `snapshot.page`, `snapshot.end`, `event.batch`, `event.ack` |
+| Sync | `sync.resume`, `sync.replay`, `sync.reset`, `message.append`, `snapshot.waiting`, `snapshot.begin`, `snapshot.page`, `snapshot.end`, `event.batch`, `event.ack` |
+| Session | `session.catalog`, `session.settled` |
+| Agents | `agents.catalog`, `agents.update` |
 | Commands | `command.submit`, `command.query`, `command.state`, `command.result` |
 | Approval | `approval.offer`, `approval.decision`, `approval.expired` |
 | Streams/blobs | `stream.open`, `stream.close`, `stream.cancel`, `stream.error`, `blob.ready`, `blob.release` |
-| Terminal | `terminal.open`, `terminal.ready`, `terminal.resize`, `terminal.key`, `terminal.reset`, `terminal.history.request`, `terminal.history.result`, `terminal.close` |
-| Voice | `voice.start`, `voice.partial`, `voice.finish`, `voice.cancel`, `voice.error` |
+| Terminal | `terminal.open`, `terminal.ready`, `terminal.resize`, `terminal.key`, `terminal.reset`, `terminal.history.request`, `terminal.history.response`, `terminal.close` |
+| Voice | `voice.start`, `voice.audio`, `voice.partial`, `voice.finish`, `voice.cancel`, `voice.error` |
 | Push | `push.endpoint`, `push.endpoint.revoke` |
 
 Schemas must set required fields and bounds while permitting additive unknown fields.
+
+`push.endpoint.body` is `{endpointId, distributor, endpoint, wakePublicKey?}`; `wakePublicKey` is OPTIONAL and omitted when the distributor does not support application-level wake encryption.
 
 ## Outer relay route protocol
 
@@ -142,19 +151,19 @@ Control connection:
 
 Normal Android data rendezvous signs a fresh `audience:"device-data"` challenge with its registered device route key. Provisional Android instead presents the signed QR invitation described below; it grants only one pairing rendezvous. The relay sends the authenticated Mac control socket `route.notice {rendezvousId,nonce,expiresAt,mode}`. Mac opens one outbound data WSS and signs a fresh `audience:"mac-data"` challenge bound to that notice. Matching sockets must arrive within 20 seconds; the in-memory notice is atomically consumed, then the relay switches to bounded binary byte splice and no longer parses inner data. Restart loses notices, never credentials or content.
 
-The QR URI is `pimobile://pair?v=1&d=<base64url>` where `d` is a JCS JSON envelope, capped at 2 KiB decoded. Its signed payload contains version, relay WSS URL, route ID, Mac route key ID, invitation UUID, five-minute expiry, 32-byte nonce, provisional Mac server-certificate SHA-256, and direct-LAN host/port candidates. The Mac route key signature lets the relay authenticate first-device provisional attachment without a device key. Relay observation of route/invitation metadata is explicit; invitation use is one-shot in relay memory and again atomically consumed by the Mac on certificate issuance.
+The QR URI is `pimobile://pair?v=1&d=<base64url>` where `d` is a JCS JSON envelope, capped at 2 KiB decoded. Its signed payload contains version, relay WSS URL, route ID, Mac route key ID, invitation UUID, Mac instance UUID (`macInstanceId`), five-minute expiry, 32-byte nonce, provisional Mac server-certificate SHA-256, and direct-LAN host/port candidates. The Mac route key signature lets the relay authenticate first-device provisional attachment without a device key. Relay observation of route/invitation metadata is explicit; invitation use is one-shot in relay memory and again atomically consumed by the Mac on certificate issuance.
 
 ## Pairing and authentication flow
 
 Before transport, Android generates its non-exportable P-256 TLS key/CSR, hashes canonical DER, and generates a separate P-256 route-auth key. The QR supplies a five-minute invitation and provisional Mac server-certificate fingerprint. Android opens outer WSS, then inner TLS 1.3 with **server authentication only**, pins that fingerprint, and enters `PAIRING_PROVISIONAL`; client-certificate requests are forbidden there.
 
-1. `pair.begin` carries invitation ID, device route-key ID/public key, and CSR hash; `pair.csr` carries the bounded CSR whose hash must match.
+1. `pair.begin` carries invitation ID, device route-key ID/public key, and CSR hash; `pair.csr` carries the bounded CSR whose hash must match. The Mac's `pair.begin` response additionally carries `pairingToken`: 32 cryptographically random bytes generated per ceremony, base64url-encoded unpadded (43 characters), sent over the provisional leaf-pinned TLS channel. Both sides compute the session binding as lowercase hex `SHA-256(pairingToken raw bytes)`.
 2. If no owner credential exists, Mac sends `auth.registration.options`; only `auth.registration.response` is accepted. Otherwise it sends `auth.assertion.options`; only `auth.assertion.response` is accepted. Registration and assertion are never multiplexed through an ambiguous message.
-3. The Mac stores a challenge record bound to ceremony kind, invitation ID, TLS exporter, CSR hash, RP, exact Android origin, and expiry. The exporter is 32 bytes from label `EXPORTER-Pi-Mobile-Pairing-v1` and context `SHA-256("pimobile-pair-v1\0" || invitation UUID bytes || CSR SHA-256 bytes)`. A response on another TLS connection, invitation, CSR, or ceremony fails.
-4. `auth.result` precedes transcript-bound short-code display. `pair.confirm` reports waiting/confirmed/rejected state; local Mac confirmation is mandatory and cannot be supplied by Android.
+3. The Mac stores a challenge record bound to ceremony kind, invitation ID, session binding, CSR hash, RP, exact Android origin, and expiry. `sessionBinding` replaces the earlier TLS-exporter field because the TLS exporter is unavailable on API 29 (it requires a hidden Conscrypt API). The binding is equivalent: the token never leaves the provisional channel, which is pinned to the Mac's leaf certificate, so it cannot be replayed onto another TLS connection, invitation, CSR, or ceremony. A response on another connection, invitation, CSR, or ceremony fails.
+4. `auth.result` precedes transcript-bound short-code display. Its canonical body is `{success: boolean, error?: string code}`; `error` is an upper-snake-case code present only on failure. `expiresAt` (RFC 3339 date-time) is present when the authenticated passkey session expires and communicates that expiry to the device. `pair.confirm` reports waiting/confirmed/rejected state; local Mac confirmation is mandatory and cannot be supplied by Android.
 5. On confirmation the Mac atomically consumes the invitation, registers/revokes route public keys as needed, signs the CSR, and returns `pair.result` with the bounded certificate chain. The provisional stream closes. Only a new mTLS connection may enter normal negotiation.
 
-First-owner registration is allowed only under a valid unconsumed invitation plus local Mac confirmation. Later-device pairing requires assertion by the existing owner credential before certificate issuance. Normal unlock/authentication on an already paired mTLS connection uses the assertion messages.
+First-owner registration is allowed only under a valid unconsumed invitation plus local Mac confirmation. Later-device pairing requires assertion by the existing owner credential before certificate issuance. Normal unlock/authentication on an already paired mTLS connection uses the assertion messages with the `unlockBinding` shape: `ceremonyKind` is the constant `"assertion"`, and the binding carries `deviceId`, `rpId`, `origin`, `challenge`, and `expiresAt`. There is deliberately no `tlsExporter` field: the TLS exporter is unavailable on API 29 (it requires a hidden Conscrypt API), so the Mac never emits or verifies it. Instead the assertion is challenge-bound over the mTLS channel itself. The Mac generates 32 cryptographically random challenge bytes per ceremony, stores a pending ceremony keyed by the device identity (`deviceId`, certificate ID, and path generation from the mutually authenticated channel), and accepts exactly one response before the five-minute expiry. The challenge is the session-bound secret: it is issued only to the peer holding the paired client certificate on this mTLS connection, and `verifyOwnerAssertion` requires the signed assertion to echo that exact pending challenge. A response replayed on another connection, device, or ceremony has no matching pending challenge and fails; expired or consumed ceremonies fail closed.
 
 ## Pi RPC records and events
 
@@ -229,15 +238,21 @@ Missing, expired, mismatched, cross-device, not-ready, or orphan references reje
 
 ## Synchronization
 
-Android persists `(sessionId, streamEpoch, sequence, leafId)` only after its reducer transaction commits. It sends these in `sync.resume`.
+Android persists `(sessionId, streamEpoch, sequence, leafId)` only after its reducer transaction commits. It sends these in `sync.resume` as a multi-session array: `{cursors: [{sessionId, streamEpoch, sequence, leafId}]}`.
+
+### Agent insights
+
+The host sends `agents.catalog {sessions: [{sessionId, agents}]}` on sync and resume. It is the full current snapshot for each included session; each `agents` array has at most 256 entries. An agent is `{agentId, parentAgentId?, description, agentType, status, startedAt, endedAt?, toolUses?, model?}`. `agentId` is an opaque identifier; `parentAgentId` forms the visible subagent tree. `status` is one of `running`, `waiting`, `completed`, `failed`, or `stopped`; descriptions are at most 256 characters. The host sends `agents.update {sessionId, agent}` whenever an agent changes. Receivers upsert the agent by `agentId` in that session. This is current-state telemetry only: no agent history is retained, and a later catalog replaces the displayed set for its session.
 
 - Matching epoch + contiguous retained events: host emits `sync.replay` then ordered batches.
 - Missing range, unknown cursor, epoch mismatch, or leaf mismatch: host emits `sync.reset`; Android drops provisional/live state and retains drafts.
 - Canonical snapshot work runs inside the session actor, blocks bridge mutations, and waits for Pi idle/settled. If a gap occurs while active, `snapshot.waiting` marks transcript/live provisional data unavailable; no partial snapshot is emitted.
 - At idle the host freezes event cursor `F` and issues exactly one canonical `get_entries` request for the attempt. Its entries and eight-hex/null leaf are the sole transcript source and are paged from one immutable response.
 - State/model/thinking/queue/tree/commands queries are optional adjunct pages tagged with `F`; they cannot add, replace, or reorder transcript entries.
+- Finalized transcript appends are announced on the wire by `message.append {sessionId, streamEpoch, appendId}`; `appendId` is a canonical unsigned 64-bit decimal text identifier, never a leaf id. Settlement events are announced by `session.settled {sessionId, settlementId}` carrying an explicit opaque `settlementId`.
+- `snapshot.begin {sessionId, streamEpoch, messageCount, lastAppendId}` opens a snapshot: `messageCount` is the uint64 count of transcript messages and `lastAppendId` is the uint64 `appendId` of the final appended message, or `null` for an empty session. `snapshot.end {sessionId, streamEpoch, messageCount, lastAppendId, leafId, validated: true}` closes it with the same append cursor plus the verified eight-hex/null `leafId`.
 - The first response records `lastAppendId` from its final append-order entry separately from `leafId`. Before publication the host calls validation-only `get_entries {since: lastAppendId}`; for an empty session it repeats a full query. It must return no new append-order entries and the same leaf. This response is never merged; any entry or leaf change discards the attempt and retries from idle. The leaf itself is never used as an append cursor because a branched session may point behind later off-branch entries.
-- `snapshot.end` includes `F` and verified leaf. Android commits atomically, acknowledges, then receives retained events strictly after `F`.
+- `snapshot.end` carries the verified leaf. Android commits atomically, acknowledges, then receives retained events strictly after `F`.
 
 Events are never silently skipped. Duplicate committed events are ignored by cursor. A next noncontiguous sequence is a gap, not best effort.
 
@@ -253,7 +268,7 @@ RPC produces no event when `ctx.ui.custom()` returns `undefined`. Therefore the 
 
 ## Terminal reconnect and history
 
-`terminalGeneration` changes on reconnect. The new xterm receives only the current visible pane/redraw; connected-client 5,000-line scrollback is not serialized or replayed. `terminal.history.request` asks the Mac for a read-only `tmux capture-pane` snapshot bounded to 5,000 lines/1 MiB. `terminal.history.result` carries its generation, capture timestamp, truncation flags, and bounded text/ref. It renders in a separate history drawer and never feeds xterm, Pi stdin, or replay state. No UI may call it full or restored scrollback.
+`terminalGeneration` changes on reconnect. The new xterm receives only the current visible pane/redraw; connected-client 5,000-line scrollback is not serialized or replayed. `terminal.history.request {sessionId, beforeSequence, limit}` pages read-only terminal history for a session: `beforeSequence` is the exclusive upper terminal-byte sequence (`null` asks for the latest page) and `limit` is the maximum entry count, bounded to 5,000. `terminal.history.response {sessionId, entries, truncated}` returns up to `limit` string entries plus a `truncated` flag, bounded to 5,000 entries/1 MiB, lower limit wins. It renders in a separate history drawer and never feeds xterm, Pi stdin, or replay state. No UI may call it full or restored scrollback.
 
 ## Errors and closure
 
@@ -274,4 +289,4 @@ Logs record codes and opaque IDs, never prompts, Pi raw payloads, terminal bytes
 
 ## Conformance gate
 
-Before feature work, Kotlin and TypeScript codecs consume identical fixtures for fragmented/coalesced frames, all bounds, invalid UTF-8, unknowns, exact `rawJson`/projection/digest, prompt-image ready/ref/orphan flow, eight-hex leaf IDs, active-gap idle snapshots, adjunct cursors/leaf retry/post-fence replay, dormant `RECEIVED` plus `command.query`, approval offer/decision/expiry, pairing registration versus assertion and exporter/CSR binding, terminal history bounds, and content-only end-event replacement plus authoritative signed/redacted `message_end` replacement. Fuzzers prove allocations remain bounded.
+Before feature work, Kotlin and TypeScript codecs consume identical fixtures for fragmented/coalesced frames, all bounds, invalid UTF-8, unknowns, exact `rawJson`/projection/digest, prompt-image ready/ref/orphan flow, eight-hex leaf IDs, active-gap idle snapshots, adjunct cursors/leaf retry/post-fence replay, dormant `RECEIVED` plus `command.query`, approval offer/decision/expiry, pairing registration versus assertion and session-binding/CSR binding, terminal history bounds, agent catalog/update bounds and status validation, and content-only end-event replacement plus authoritative signed/redacted `message_end` replacement. Fuzzers prove allocations remain bounded.

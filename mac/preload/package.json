@@ -3,6 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "main": "dist/index.cjs",
-  "scripts": { "build": "tsc -b", "test": "vitest run test" }
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "dependencies": { "@pimobile/approval": "0.1.0" },
+  "scripts": { "build": "tsc -b", "test": "vitest run --root ../.. mac/preload/test" }
 }

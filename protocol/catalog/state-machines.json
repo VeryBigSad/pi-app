@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "connection": {
+    "states": ["PAIRING_PROVISIONAL","NEGOTIATING","DEVICE_AUTHENTICATED","USER_AUTHENTICATED","SYNCING","READY","CLOSING"],
+    "transitions": [
+      {"from":"PAIRING_PROVISIONAL","event":"certificate_issued","to":"CLOSING"},
+      {"from":"NEGOTIATING","event":"hello_accepted","to":"DEVICE_AUTHENTICATED"},
+      {"from":"DEVICE_AUTHENTICATED","event":"assertion_accepted","to":"USER_AUTHENTICATED"},
+      {"from":"USER_AUTHENTICATED","event":"sync_started","to":"SYNCING"},
+      {"from":"SYNCING","event":"sync_committed","to":"READY"},
+      {"from":"READY","event":"auth_lock","to":"DEVICE_AUTHENTICATED"},
+      {"from":"USER_AUTHENTICATED","event":"auth_lock","to":"DEVICE_AUTHENTICATED"},
+      {"from":"SYNCING","event":"auth_lock","to":"DEVICE_AUTHENTICATED"}
+    ]
+  },
+  "binaryStream": {
+    "states": ["UNSEEN","OPEN","CLOSED","CANCELLED","ERRORED"],
+    "transitions": [
+      {"from":"UNSEEN","event":"stream.open","to":"OPEN"},
+      {"from":"OPEN","event":"contiguous_chunk","to":"OPEN"},
+      {"from":"OPEN","event":"stream.close_valid","to":"CLOSED"},
+      {"from":"OPEN","event":"stream.cancel","to":"CANCELLED"},
+      {"from":"OPEN","event":"invalid_chunk_or_close","to":"ERRORED"}
+    ],
+    "fatalEvents": ["chunk_before_open","duplicate_chunk","sequence_gap","offset_gap","overflow","digest_mismatch","data_after_close"]
+  },
+  "commandJournal": {
+    "states": ["RECEIVED","ARMED","ACKED","REJECTED","INDETERMINATE"],
+    "recovery": {
+      "RECEIVED": {"state":"RECEIVED","dormant":true,"wake":"same_id_same_hash_ready_authenticated_submit_full_revalidation"},
+      "ARMED": {"state":"INDETERMINATE","dormant":false,"wake":"never"},
+      "ACKED": {"state":"ACKED","dormant":false,"wake":"never"},
+      "REJECTED": {"state":"REJECTED","dormant":false,"wake":"never"},
+      "INDETERMINATE": {"state":"INDETERMINATE","dormant":false,"wake":"never"}
+    },
+    "queryDispatches": false
+  },
+  "snapshot": {
+    "states": ["WAITING_IDLE","CAPTURING","VALIDATING","PUBLISHING","REPLAYING","RETRY"],
+    "captureSource":"one_get_entries_response",
+    "appendCursor":"lastAppendId",
+    "appendIdFormat":"uint64_decimal_text",
+    "leafPattern":"^[0-9a-f]{8}$",
+    "validation":"get_entries_since_last_append_id_or_full_when_empty",
+    "validationMerge":false
+  },
+  "agentInsights": {
+    "snapshot":"agents.catalog is sent on sync/resume; it replaces the visible agent set for every included session",
+    "update":"agents.update upserts agent by agentId in its session on each observed change",
+    "retention":"no history retention; absent sessions or agents after a catalog are no longer current"
+  },
+  "assistantDelta": {
+    "commitEvent":"message_end",
+    "settlementEvent":"agent_settled",
+    "replacementEvents":["text_end","thinking_end","toolcall_end","message_end"],
+    "discardEvents":["unexpected_transition","unexpected_index","sequence_gap","stream_epoch_change","reconnect"]
+  }
+}

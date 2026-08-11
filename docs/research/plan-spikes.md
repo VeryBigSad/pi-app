@@ -161,8 +161,8 @@ Stale claims that must not be restated: that the Android SDK or AVDs are missing
 | Gap | Consequence |
 |---|---|
 | No physical Android device | Bitwarden/input/microphone/hardware/Doze/OEM/performance evidence blocked; substitutes are weaker. |
-| No public `VeryBigSad/verybigsad.github.io` repository or live DAL | `https://verybigsad.github.io/` returns 404. The hosting pattern is verified against a production GitHub Pages host; the deployment is not done. |
-| No dedicated release signing key | The DAL fingerprint and the exact Android origin both derive from it, so passkey acceptance is blocked until it exists and is backed up outside Git. |
+| Public DAL | Repository is deployed; root assetlinks returns 200 JSON/no redirect and Google DAL API resolves both relations. Independent fingerprint review remains. |
+| Release signing evidence | Dedicated EC cert now exists outside Git with Keychain password and published DAL fingerprint; local signed APK and live DAL/API match; independent review, off-machine/Bitwarden backup, and rotation drill remain. |
 | No Firebase credentials, by design | Optional adapter compile/fake tests are planned; live FCM is never a release gate. |
 | No cloud resource created | The single YC VM is applied only in Stage 5, after a reviewed plan and a current cost check. |
 | Sleeping or offline Mac | Pi cannot run, no fresh assertion is possible, and no wake is sent. Inherent, documented rather than mitigated. |

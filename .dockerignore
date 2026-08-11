@@ -1,0 +1,10 @@
+**
+!relay/
+!relay/go.mod
+!relay/go.sum
+!relay/cmd/
+!relay/cmd/**/
+!relay/cmd/**/*.go
+!relay/internal/
+!relay/internal/**/
+!relay/internal/**/*.go

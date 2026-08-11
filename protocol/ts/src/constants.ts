@@ -1,0 +1,119 @@
+export const PROTOCOL_MAJOR = 1;
+export const PROTOCOL_MINOR = 0;
+export const PIMB_HEADER_BYTES = 12;
+export const PIMB_MAGIC = Uint8Array.of(0x50, 0x49, 0x4d, 0x42);
+
+export enum FrameKind {
+  Json = 0x01,
+  BlobChunk = 0x02,
+  AudioPcm = 0x03,
+  TerminalBytes = 0x04
+}
+
+export const STREAM_PREFIX_BYTES = 28;
+export const TERMINAL_PREFIX_BYTES = 16;
+export const MAX_FRAME_PAYLOAD_BYTES = 1024 * 1024;
+export const MAX_JSON_PAYLOAD_BYTES = 256 * 1024;
+export const MAX_BINARY_DATA_BYTES = 64 * 1024;
+export const MAX_EVENT_BATCH_EVENTS = 128;
+export const MAX_EVENT_BATCH_BYTES = 256 * 1024;
+export const MAX_INLINE_RAW_BYTES = 128 * 1024;
+export const MAX_OUTBOUND_QUEUE_FRAMES = 512;
+export const MAX_OUTBOUND_QUEUE_BYTES = 8 * 1024 * 1024;
+export const OUTBOUND_QUEUE_STALL_MILLISECONDS = 10_000;
+export const MAX_PROMPT_IMAGE_BYTES = 8 * 1024 * 1024;
+export const MAX_TERMINAL_HISTORY_LINES = 5_000;
+export const MAX_TERMINAL_HISTORY_BYTES = 1024 * 1024;
+export const MAX_FINALIZED_MESSAGES = 500;
+export const MAX_PI_RECORD_BYTES = 16 * 1024 * 1024;
+export const MAX_REPLAY_EVENTS_PER_SESSION = 10_000;
+export const MAX_REPLAY_BYTES_PER_SESSION = 64 * 1024 * 1024;
+export const MAX_REPLAY_BYTES_GLOBAL = 256 * 1024 * 1024;
+export const REPLAY_RETENTION_MILLISECONDS = 24 * 60 * 60 * 1000;
+export const MAX_RAW_REFERENCE_STORE_BYTES = 512 * 1024 * 1024;
+export const RAW_REFERENCE_RETENTION_MILLISECONDS = 30 * 24 * 60 * 60 * 1000;
+export const MAX_PROMPT_BLOB_BYTES_PER_DEVICE = 64 * 1024 * 1024;
+export const MAX_PROMPT_BLOB_BYTES_GLOBAL = 256 * 1024 * 1024;
+export const MAX_PROMPT_BLOB_CONCURRENT_UPLOADS = 32;
+export const PROMPT_BLOB_ORPHAN_MILLISECONDS = 15 * 60 * 1000;
+export const PROMPT_BLOB_DORMANT_MILLISECONDS = 24 * 60 * 60 * 1000;
+export const PROMPT_BLOB_TERMINAL_MILLISECONDS = 60 * 60 * 1000;
+export const JOURNAL_DORMANT_MILLISECONDS = 24 * 60 * 60 * 1000;
+export const JOURNAL_FULL_RETENTION_MILLISECONDS = 30 * 24 * 60 * 60 * 1000;
+export const JOURNAL_TOMBSTONE_RETENTION_MILLISECONDS = 365 * 24 * 60 * 60 * 1000;
+export const MAX_JOURNAL_TOMBSTONE_ROWS = 100_000;
+export const MAX_ANDROID_CACHE_MESSAGES = 50_000;
+export const MAX_ANDROID_CACHE_BYTES = 512 * 1024 * 1024;
+export const BACKGROUND_LEASE_MILLISECONDS = 5 * 60 * 1000;
+export const MAX_ROUTE_JSON_BYTES = 16 * 1024;
+export const ROUTE_NONCE_BYTES = 32;
+export const ROUTE_CHALLENGE_MILLISECONDS = 30_000;
+export const ROUTE_REPLAY_MILLISECONDS = 120_000;
+export const ROUTE_HEARTBEAT_MILLISECONDS = 30_000;
+export const ROUTE_HEARTBEAT_TIMEOUT_MILLISECONDS = 90_000;
+export const ROUTE_RENDEZVOUS_MILLISECONDS = 20_000;
+export const ROUTE_KEY_OVERLAP_MILLISECONDS = 24 * 60 * 60 * 1000;
+export const MAX_PAIRING_INVITATION_BYTES = 2 * 1024;
+export const PAIRING_INVITATION_MILLISECONDS = 5 * 60 * 1000;
+export const MAX_APPROVAL_QUEUE_ENTRIES = 8;
+export const APPROVAL_PROMOTION_MILLISECONDS = 30_000;
+export const APPROVAL_DECISION_MILLISECONDS = 120_000;
+export const APPROVAL_HOOK_MILLISECONDS = 150_000;
+export const MAX_VOICE_BODY_BYTES = 64 * 1024;
+export const MAX_VOICE_TEXT_CHARS = 16_384;
+export const MAX_AGENTS = 256;
+
+export const HARD_BOUNDS = {
+  framePayloadBytes: MAX_FRAME_PAYLOAD_BYTES,
+  jsonPayloadBytes: MAX_JSON_PAYLOAD_BYTES,
+  binaryDataBytes: MAX_BINARY_DATA_BYTES,
+  eventBatchEvents: MAX_EVENT_BATCH_EVENTS,
+  eventBatchBytes: MAX_EVENT_BATCH_BYTES,
+  inlineRawBytes: MAX_INLINE_RAW_BYTES,
+  outboundQueueFrames: MAX_OUTBOUND_QUEUE_FRAMES,
+  outboundQueueBytes: MAX_OUTBOUND_QUEUE_BYTES,
+  outboundQueueStallMilliseconds: OUTBOUND_QUEUE_STALL_MILLISECONDS,
+  promptImageBytes: MAX_PROMPT_IMAGE_BYTES,
+  terminalHistoryLines: MAX_TERMINAL_HISTORY_LINES,
+  terminalHistoryBytes: MAX_TERMINAL_HISTORY_BYTES,
+  finalizedMessages: MAX_FINALIZED_MESSAGES,
+  piRecordBytes: MAX_PI_RECORD_BYTES,
+  replayEventsPerSession: MAX_REPLAY_EVENTS_PER_SESSION,
+  replayBytesPerSession: MAX_REPLAY_BYTES_PER_SESSION,
+  replayBytesGlobal: MAX_REPLAY_BYTES_GLOBAL,
+  replayRetentionMilliseconds: REPLAY_RETENTION_MILLISECONDS,
+  rawReferenceStoreBytes: MAX_RAW_REFERENCE_STORE_BYTES,
+  rawReferenceRetentionMilliseconds: RAW_REFERENCE_RETENTION_MILLISECONDS,
+  promptBlobBytesPerDevice: MAX_PROMPT_BLOB_BYTES_PER_DEVICE,
+  promptBlobBytesGlobal: MAX_PROMPT_BLOB_BYTES_GLOBAL,
+  promptBlobConcurrentUploads: MAX_PROMPT_BLOB_CONCURRENT_UPLOADS,
+  promptBlobOrphanMilliseconds: PROMPT_BLOB_ORPHAN_MILLISECONDS,
+  promptBlobDormantMilliseconds: PROMPT_BLOB_DORMANT_MILLISECONDS,
+  promptBlobTerminalMilliseconds: PROMPT_BLOB_TERMINAL_MILLISECONDS,
+  journalDormantMilliseconds: JOURNAL_DORMANT_MILLISECONDS,
+  journalFullRetentionMilliseconds: JOURNAL_FULL_RETENTION_MILLISECONDS,
+  journalTombstoneRetentionMilliseconds: JOURNAL_TOMBSTONE_RETENTION_MILLISECONDS,
+  journalTombstoneRows: MAX_JOURNAL_TOMBSTONE_ROWS,
+  androidCacheMessages: MAX_ANDROID_CACHE_MESSAGES,
+  androidCacheBytes: MAX_ANDROID_CACHE_BYTES,
+  backgroundLeaseMilliseconds: BACKGROUND_LEASE_MILLISECONDS,
+  routeJsonBytes: MAX_ROUTE_JSON_BYTES,
+  routeNonceBytes: ROUTE_NONCE_BYTES,
+  routeChallengeMilliseconds: ROUTE_CHALLENGE_MILLISECONDS,
+  routeReplayMilliseconds: ROUTE_REPLAY_MILLISECONDS,
+  routeHeartbeatMilliseconds: ROUTE_HEARTBEAT_MILLISECONDS,
+  routeHeartbeatTimeoutMilliseconds: ROUTE_HEARTBEAT_TIMEOUT_MILLISECONDS,
+  routeRendezvousMilliseconds: ROUTE_RENDEZVOUS_MILLISECONDS,
+  routeKeyOverlapMilliseconds: ROUTE_KEY_OVERLAP_MILLISECONDS,
+  pairingInvitationBytes: MAX_PAIRING_INVITATION_BYTES,
+  pairingInvitationMilliseconds: PAIRING_INVITATION_MILLISECONDS,
+  approvalQueueEntries: MAX_APPROVAL_QUEUE_ENTRIES,
+  approvalPromotionMilliseconds: APPROVAL_PROMOTION_MILLISECONDS,
+  approvalDecisionMilliseconds: APPROVAL_DECISION_MILLISECONDS,
+  approvalHookMilliseconds: APPROVAL_HOOK_MILLISECONDS,
+  voiceBodyBytes: MAX_VOICE_BODY_BYTES,
+  voiceTextChars: MAX_VOICE_TEXT_CHARS,
+  maxAgents: MAX_AGENTS,
+} as const;
+
+export const MAX_UINT64 = 18_446_744_073_709_551_615n;

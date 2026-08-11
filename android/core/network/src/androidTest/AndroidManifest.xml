@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Instrumentation tests exercise the relay pairing HTTP client over a loopback socket. -->
+    <application android:usesCleartextTraffic="true" />
+</manifest>

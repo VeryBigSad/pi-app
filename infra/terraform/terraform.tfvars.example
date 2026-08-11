@@ -1,0 +1,14 @@
+folder_id      = "b1g00000000000000000"
+zone           = "ru-central1-d"
+boot_image_id  = "fd800000000000000000"
+admin_cidr     = "203.0.113.10/32"
+ssh_public_key = "ssh-ed25519 AAAA... operator"
+relay_image    = "ghcr.io/verybigsad/pi-app/relay@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+# Set false to remove the TCP 22 ingress rule entirely after bootstrap.
+ssh_ingress_enabled = true
+
+# Current Yandex Cloud calculator estimate, refreshed immediately before plan.
+# Plan fails if this exceeds max_monthly_cost_rub (default 1500, hard cap).
+monthly_cost_estimate_rub = 1400
+# max_monthly_cost_rub    = 1500

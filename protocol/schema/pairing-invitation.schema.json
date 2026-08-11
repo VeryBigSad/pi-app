@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://verybigsad.github.io/pi-mobile/schema/pairing-invitation-v1.json",
+  "title": "Pi Mobile signed pairing invitation v1",
+  "type": "object",
+  "x-maxJsonBytes": 2048,
+  "required": ["signed", "signature"],
+  "properties": {
+    "signed": {
+      "type": "object",
+      "required": ["version", "relayUrl", "routeId", "routeKeyId", "invitationId", "macInstanceId", "expiresAt", "nonce", "serverCertificateSha256", "directCandidates"],
+      "properties": {
+        "version":{"const":1},
+        "relayUrl":{"type":"string","format":"uri","pattern":"^wss://","maxLength":512},
+        "routeId":{"$ref":"#/$defs/opaqueId"},
+        "routeKeyId":{"$ref":"#/$defs/opaqueId"},
+        "invitationId":{"$ref":"#/$defs/uuidV4"},
+        "macInstanceId":{"$ref":"#/$defs/uuidV4"},
+        "expiresAt":{"type":"string","format":"date-time","maxLength":64},
+        "nonce":{"$ref":"#/$defs/base64url32"},
+        "serverCertificateSha256":{"$ref":"#/$defs/sha256"},
+        "directCandidates":{"type":"array","maxItems":16,"items":{"type":"object","required":["host","port"],"properties":{"host":{"type":"string","minLength":1,"maxLength":253},"port":{"type":"integer","minimum":1,"maximum":65535}},"additionalProperties":true}}
+      },
+      "additionalProperties": true
+    },
+    "signature":{"type":"string","minLength":1,"maxLength":192,"pattern":"^[A-Za-z0-9_-]+$","x-maxDecodedBytes":144}
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "opaqueId":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9._-]+$"},
+    "uuidV4":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
+    "sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},
+    "base64url32":{"type":"string","minLength":43,"maxLength":43,"pattern":"^[A-Za-z0-9_-]{43}$"}
+  }
+}

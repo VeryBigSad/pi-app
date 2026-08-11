@@ -1,7 +1,7 @@
 # Pi Mobile 1.0 master plan
 
-Last updated: 2026-08-09
-Status: final-audited plan; Stage 0 scaffold started, executable contracts in progress
+Last updated: 2026-08-11
+Status: implementation complete across all planned modules; verification in progress. `npm run check` green (372 tests), Gradle aggregate green (545 unit test executions), API 29 instrumentation green (113 tests, `emulator-5590`). API 34+ lanes, no-Google lanes, Macrobenchmarks, cloud apply, and all physical-device gates remain open. Release and cloud apply stay NO-GO until the open gates in [requirements-traceability.md](requirements-traceability.md) close.
 
 ## Definition of done
 
@@ -25,9 +25,20 @@ Verified on 2026-08-09:
 - Supported Google APIs AVDs: `PiApp_API_29`, `domonap` (API 34), `PiApp_API_36`; no-Google UI `PiApp_API_34_AOSP_UI` uses the default image and headless `PiApp_API_34_AOSP` uses AOSP ATD; `PiApp_API_28` remains unsupported negative-only.
 - `~/.groq_key` exists, 57 bytes, mode `0600`.
 - Go 1.26.2 and Terraform 1.5.7 are installed.
-- No project YC resource, production DAL repository/file, release signing key, Firebase credential, or physical-device evidence exists yet.
+- No project YC resource, Firebase credential, off-machine signing-key backup, or physical-device evidence exists. Public DAL and dedicated local signing identity now exist and match a signed APK.
 
 Do not repeat stale claims that Android SDK/AVDs are absent or that the Groq key is world-readable.
+
+## Stage progress (2026-08-11)
+
+| Stage | State | Evidence / remaining |
+|---|---|---|
+| 0 — contract and security freeze | **Complete** | Schemas + golden fixtures (`protocol/schema/`, `protocol/fixtures/`), cross-language codecs, fuzz, threat tests, invocation catalog, build locks, pinned Pi 0.84 with full-dist-tree manifest + two-file patch, terminal bundle with `structuredClone` shim and API 29 canary green |
+| 1 — foundations | **Complete** | Mac runtime (`mac/host`), Android core, direct TLS + relayed inner TLS pairing/mTLS, CSR-first ceremony, dormant journal recovery, idle canonical snapshot, Go relay with public-key-only registry, local infra harness |
+| 2 — semantic vertical slice | **Complete** | RPC facade, session inbox/timeline/composer/dialogs/approval sheet, agents insight screen, settings, delta assembly, raw projector, approval broker with 30/120/150 s boundaries, invocation pre-routing |
+| 3 — push, voice, release identity | **Mostly complete** | UnifiedPush client + opaque wake + catch-up workers; Groq VAD voice path with durable rate/cost ledger; DAL live + signed-APK identity match. Open: live opt-in Groq test, no-Google AVD lanes, physical Bitwarden/Doze/mic evidence |
+| 4 — terminal compatibility | **Complete on API 29 emulator** | Bundled xterm + node-pty + private tmux split input, history drawer, reconnect semantics; API 29 instrumentation green. Open: API 34/36 lanes, physical Gboard/Bluetooth input |
+| 5 — cloud, hardening, E2E, release | **Not started** | Terraform defined/hardened but never applied; no remote suites, no Macrobenchmarks, no physical manual evidence, no SBOM/release |
 
 ## Fixed decisions
 
@@ -345,7 +356,7 @@ Upgrade host before app when a new protocol minor is required. Unsupported major
 
 ## Honest limitations and external gates
 
-- Required Pages/DAL and dedicated release key do not exist; signer/Pages compromise remains residual identity risk even after exact-origin pinning.
+- Public Pages/DAL and a dedicated release key now exist and match a locally signed APK; independent fingerprint review, off-machine backup, account protection, and rotation drill remain open, and signer/Pages compromise stays a residual identity risk even after exact-origin pinning.
 - Real Bitwarden, ntfy under Doze/OEM rules, microphone, hardware key, and Gboard evidence needs a physical device.
 - API 29/34/36 Google APIs and API 34 AOSP ATD lanes are installed; API 28 is negative-only, not supported.
 - Optional FCM live test needs Firebase credentials and is not a release blocker.

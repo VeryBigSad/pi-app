@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; font-src 'none'; media-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; manifest-src 'none'">
+  <link rel="stylesheet" href="xterm.css">
+  <link rel="stylesheet" href="terminal-shell.css">
+  <title>Pi Mobile Terminal</title>
+</head>
+<body>
+  <main id="terminal-shell">
+    <div id="terminal-status" role="status" aria-live="polite" hidden></div>
+    <div id="terminal-reconnect" role="status" aria-live="polite" hidden>Reconnecting terminal</div>
+    <div id="terminal" role="application" aria-label="Pi terminal"></div>
+    <div id="terminal-scrollback-indicator" aria-live="polite" hidden>Viewing scrollback</div>
+    <div id="terminal-selection-indicator" aria-live="polite" hidden>Selection active · drag to adjust</div>
+    <div id="terminal-link-copy" role="status" aria-live="polite" hidden>Link copied</div>
+  </main>
+  <aside id="terminal-history" role="dialog" aria-modal="true" aria-labelledby="terminal-history-title" hidden>
+    <header>
+      <div>
+        <h1 id="terminal-history-title">Terminal history</h1>
+        <div id="terminal-history-meta" role="status"></div>
+      </div>
+      <button id="terminal-history-close" type="button" aria-label="Close terminal history">Close</button>
+    </header>
+    <p id="terminal-history-truncated" role="status" hidden>Earlier terminal history is unavailable.</p>
+    <pre id="terminal-history-content" tabindex="0" aria-label="Read-only server terminal history"></pre>
+  </aside>
+  <script src="terminal.js"></script>
+</body>
+</html>

@@ -1,6 +1,7 @@
 # Security design and threat model
 
-Last updated: 2026-08-09
+Last updated: 2026-08-11
+Status: implemented and unit/integration-tested as referenced in [requirements-traceability.md](requirements-traceability.md). Physical-device and live-remote evidence remain open gates.
 
 ## Security objectives
 
@@ -38,7 +39,7 @@ Assume the public network and relay are hostile; assume a normal unrooted Androi
 
 DAL must return HTTPS 200, `application/json`, no redirect, both `delegate_permission/common.get_login_creds` and `delegate_permission/common.handle_all_urls`, and the exact package plus dedicated release-signing fingerprint. Production excludes debug fingerprints. The Pages repository includes `.nojekyll` so `/.well-known` is published.
 
-The release key is dedicated to Pi Mobile, backed up outside Git in Bitwarden, and supplied to CI only through a protected release environment. Build automation derives from the same certificate:
+The dedicated EC release key is outside Git at mode `0600`, with its password in macOS Keychain. Its certificate SHA-256 is `CC:36:66:F3:77:CE:4C:2B:D6:CE:19:A4:7F:3A:BE:47:19:AC:04:0F:D6:4F:FB:11:9F:02:E9:AC:4B:DD:D4:FE` and Android-origin value `zDZm83fOTCvWzhmkfzq-RxmsBA_WT_sRnwLprEvd1P4`. A locally signed v3 APK matches that digest. Off-machine/Bitwarden backup, rotation drill, and protected CI delivery remain required before release. Build automation derives from the same certificate:
 
 - colon-hex SHA-256 fingerprint for DAL;
 - unpadded base64url SHA-256 for `android:apk-key-hash:${RELEASE_CERT_SHA256_BASE64URL}`.
@@ -68,10 +69,10 @@ Bitwarden compatibility follows the WebAuthn/Credential Manager contract but is 
 
 Passkeys identify the user; mTLS certificates identify a paired device. Revoking either does not silently revoke the other.
 
-1. Mac CLI creates one five-minute, single-use invitation, invalidating any previous pending invitation. QR carries a max-2-KiB JCS envelope under `pimobile://pair`: relay/direct candidates, route/key IDs, invitation ID, 32-byte nonce, five-minute expiry, provisional server-certificate SHA-256, and Mac-route ECDSA signature; it never reaches Pages.
+1. Mac CLI (`pi-mobile-host pair`) creates one five-minute, single-use invitation, invalidating any previous pending invitation. QR carries a max-2-KiB JCS envelope under `pimobile://pair`: relay/direct candidates, route/key IDs, invitation ID, `macInstanceId` (UUID identifying this Mac host instance), 32-byte nonce, five-minute expiry, provisional server-certificate SHA-256, and a Mac-route ECDSA P-256 signature over the JCS-canonical payload (`mac/host/src/security/pairing-invitation.ts`); it never reaches Pages. The signature binds the invitation to the exact Mac route key, so a relay or network attacker cannot substitute a different host identity.
 2. Before transport, Android generates a non-exportable P-256 TLS key with `DIGEST_NONE` allowed, creates/hashes the canonical CSR, and creates a separate non-exportable P-256 route-auth key. Hardware backing is used when available and reported honestly.
 3. Android opens outer WSS with the invitation, then inner TLS 1.3 with **server authentication only**, pins the QR fingerprint, and enters `PAIRING_PROVISIONAL`. No client certificate or application data is accepted.
-4. Android sends invitation, CSR hash/CSR, and device route public key. Mac binds the challenge record to invitation ID, provisional TLS exporter, CSR hash, ceremony kind, RP, origin, and expiry.
+4. Android sends invitation, CSR hash/CSR, and device route public key. Mac binds the challenge record to invitation ID, provisional TLS exporter, CSR hash, ceremony kind, RP, origin, and expiry. The exporter uses the fixed label `EXPORTER-Pi-Mobile-Pairing-v1` (shared constant: `mac/host/src/security/pairing-ceremony.ts`, `android/core/network/.../TlsExporter.kt`), so the passkey assertion is cryptographically bound to the exact provisional TLS channel.
 5. With no owner credential, only a WebAuthn registration ceremony is valid; later devices must assert the existing owner credential. Registration and assertion have distinct messages and replay domains.
 6. Both displays show a transcript-bound short code; explicit local Mac confirmation follows successful WebAuthn.
 7. Mac verifies CSR possession/binding, atomically consumes the invitation, registers the device route public key, signs a bounded-lifetime client certificate, and returns it.
@@ -83,9 +84,11 @@ The P-256 local CA is valid five years. Server and device leaves are valid 30 da
 
 Recovery commands can revoke one device/passkey/route key, overlap-rotate route keys or server leaves, or reset owner credentials/pairings without deleting Pi sessions. CA rotation requires explicit re-pairing.
 
+**Revocation kills sessions.** `pi-mobile-host revoke <deviceId>` (`devices.revoke` in `mac/host/src/daemon/daemon.ts`) revokes the device certificate in the revocation registry, revokes its relay route key locally, and propagates the revocation to the relay (`relayManager.admin().revokeKey`). Revoked peers are rejected at every subsequent handshake, and active connections carrying a revoked identity are closed rather than merely failing future requests.
+
 ## Transport
 
-VM first boot creates a root-only one-use 256-bit registration token outside Terraform state. The Mac retrieves it over authenticated SSH, registers its route public key under TLS, and both erase it; no durable bearer remains. Control/device/Mac-data WSS use P-256 ECDSA-SHA256 over JCS, SPKI keys, 32-byte nonces, 30-second audience-bound challenges, and two-minute replay retention. Control pings every 30 seconds and closes after 90. First-device data uses the Mac-route-signed invitation; paired data uses its device key. A 20-second one-use notice summons Mac data, then relay byte-splices.
+VM first boot creates a root-only one-use 256-bit registration token outside Terraform state. The Mac retrieves it over authenticated SSH, registers its route public key under TLS, and both erase it; no durable bearer remains. Bootstrap is **atomic**: cloud-init stages bootstrap/relay/ntfy secrets in a mode-`0700` staging directory (`0600` files, correct per-service ownership), validates preconditions (existing auth database without a completion marker aborts rather than regenerating credentials), and then publishes with `mv -f` renames (`infra/terraform/cloud-init.yaml.tftpl`). A failed boot cannot leave half-written credentials. Control/device/Mac-data WSS use P-256 ECDSA-SHA256 over JCS, SPKI keys, 32-byte nonces, 30-second audience-bound challenges, and two-minute replay retention. Control pings every 30 seconds and closes after 90. First-device data uses the Mac-route-signed invitation; paired data uses its device key. A 20-second one-use notice summons Mac data, then relay byte-splices.
 
 Relay durable state is limited to route registration key IDs/public keys and revocation. It stores no shared bearer/HMAC secret, session names, invitation contents, offline data, or inner bytes. Route-key rotation registers old+new for a 24-hour overlap, switches clients, then revokes old; challenge signatures, nonce/expiry/audience binding, replay cache, one-use notices, compression-off, buffers/rates, and no payload logs are contract-tested. The Mac remains inner TLS server: QR-pinned server-auth in pairing, mTLS afterward.
 
@@ -107,6 +110,8 @@ Terminal bytes are not journaled or replayed. Lost acknowledgment means delivery
 
 One shared classifier/Unix-socket broker enforces versioned policy. The host checks destructive bridge-owned actions. An integrity-pinned Pi 0.84 patch calls a preload-registered immutable client after tool handlers mutate input and once inside `AgentSession.executeBash` after shell-prefix resolution, covering normal direct RPC, interactive, and programmatic bash without double prompting. `NODE_OPTIONS` loads it before Pi, and every nested in-process `AgentSession` invokes the same patched core even when created with `extensions:false`. Source locator, patch hash, nested-session, direct-RPC single-offer, and resolved-prefix tests block Pi drift. A `user_bash` extension that executes and returns its own result is arbitrary extension code and remains outside containment.
 
+The pinned Pi installation is verified against a **full-dist-tree integrity manifest** (`mac/pi-patch/manifest/pi-0.84.0.json`): every file of the pinned 0.84.0 distribution has a recorded SHA-256, the two patched files (`AgentSession`, bash tool) have both original and patched hashes, and install/verify walks the whole tree (`assertTreeMatches`) rather than spot-checking. Any drift — added, removed, or modified file — blocks startup.
+
 The broker has one globally active approval and a FIFO of at most eight waiting operations across sessions/devices. The preload starts a 150-second monotonic cap at hook invocation. Queue overflow or failure to promote within 30 seconds blocks immediately; promotion starts a decision window of up to 120 seconds, clipped by the hook cap. Connect, queue, decision, and response therefore all resolve within that cap. Denial, expiry, disconnect, missing socket, malformed response, changed final args, or classifier failure returns a deterministic block result and lets the Pi turn continue; it never wedges waiting for UI. Approval travels only as `approval.offer/decision/expired`, never as Pi `confirm`.
 
 Policy covers recursive/protected deletion, destructive VCS/system/account/database/Terraform/cloud actions, reviewed destructive MCP operations, and unclassifiable dynamic shell. The offer displays normalized final operation, cwd/resource, digest, reasons, and expiry; decision binds operation/offer/hash and is single-use. Known extension slash commands are invocation-manifest classified. Destructive/unknown side-effect commands gate at invocation or route terminal.
@@ -124,6 +129,17 @@ Routine reads/builds/tests do not prompt. No “always allow” or generic appro
 - Notification payloads contain an opaque random wake ID only. Detailed text is fetched over mTLS and shown only after unlock.
 - URI/file imports use Photo Picker or scoped access, enforce MIME/size, and copy into private bounded storage. Prompt images upload as digest-bound blobs; not-ready/cross-device refs fail, and cancelled/disconnected/expired orphan data is swept.
 - WebView terminal cannot access files/content, remote network, mixed content, popups, arbitrary navigation, downloads, or unrestricted JS bridges. Assets are local with strict CSP; WebView debugging is off in release.
+
+## Self-update threat model
+
+The assisted updater (`android/core/update`, [ADR-0020](adr/0020-secure-self-update.md)) is designed so that a compromised metadata host or mirror cannot push code:
+
+- Metadata (`update-v1.json`) is hard-bounded at 16 KiB, fail-closed parsed (unknown keys rejected), and `versionCode` is the sole ordering authority behind a persisted monotonic high-water mark; replayed old metadata is rejected.
+- Trust comes from the APK signature, not the transport. The downloaded APK must have exactly one signer whose SHA-256 equals the compile-time pin (`CC:36:…:D4:FE`); debuggable builds disable the updater entirely.
+- Every download and every install requires explicit in-app user action plus the OS confirmation; notifications only deep-link to the update sheet.
+- Release signing secrets live only in the protected release Environment / operator Keychain; CI never sees them.
+
+Signing-identity rotation requires shipping a new pin as a normal app update first; downgrades are not supported.
 
 ## Secrets
 
@@ -160,4 +176,4 @@ Security-sensitive changes require independent Codex-large and Claude-large revi
 
 Approved arbitrary shell/tool code can damage the Mac, and arbitrary extension Node/fs/process behavior is not sandboxed by the final hook. Relay/ntfy can deny service and observe metadata. A compromised unlocked phone can act within its authorization lifetime; a compromised Mac account defeats host protections. OEM push behavior is uncontrollable.
 
-DAL and release signing remain identity supply-chain risks. A Pages-account change can hijack App Link routing or deny credential association; compromise of the dedicated signing key can produce the exact Android origin the Mac pins. The verifier never imports allowed origins from DAL, CI derives package/fingerprint/origin from the signed APK and checks both DAL relations, account protection and out-of-band fingerprint review are required, and signer rotation uses an explicit overlapping-DAL/app migration before old-key removal. These measures reduce but do not erase hosting/signing compromise, and cannot be finally verified until the Pages repository and release key exist.
+DAL and release signing remain identity supply-chain risks. A Pages-account change can hijack App Link routing or deny credential association; compromise of the dedicated signing key can produce the exact Android origin the Mac pins. The verifier never imports allowed origins from DAL, CI derives package/fingerprint/origin from the signed APK and checks both DAL relations, account protection and out-of-band fingerprint review are required, and signer rotation uses an explicit overlapping-DAL/app migration before old-key removal. These measures reduce but do not erase hosting/signing compromise. Live Pages/DAL 200/MIME/no-redirect checks and both Google DAL API relations pass. Identity release remains incomplete until independent fingerprint review, off-machine key backup, account protection, and rotation drill pass.

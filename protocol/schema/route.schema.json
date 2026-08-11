@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://verybigsad.github.io/pi-mobile/schema/route-v1.json",
+  "title": "Pi Mobile outer relay route protocol v1",
+  "type": "object",
+  "x-maxJsonBytes": 16384,
+  "required": ["type"],
+  "properties": {
+    "type": {"enum": ["route.control.begin", "route.challenge", "route.proof", "route.control.ready", "route.notice"]}
+  },
+  "allOf": [
+    {"if":{"properties":{"type":{"const":"route.control.begin"}},"required":["type"]},"then":{"required":["routeId","keyId"],"properties":{"routeId":{"$ref":"#/$defs/opaqueId"},"keyId":{"$ref":"#/$defs/opaqueId"}}}},
+    {"if":{"properties":{"type":{"const":"route.challenge"}},"required":["type"]},"then":{"required":["signed"],"properties":{"signed":{"$ref":"#/$defs/challenge"}}}},
+    {"if":{"properties":{"type":{"const":"route.proof"}},"required":["type"]},"then":{"required":["signed","signature"],"properties":{"signed":{"$ref":"#/$defs/challenge"},"signature":{"allOf":[{"$ref":"#/$defs/base64url"},{"x-maxDecodedBytes":144}]}}}},
+    {"if":{"properties":{"type":{"const":"route.control.ready"}},"required":["type"]},"then":{"required":["routeId","keyId"],"properties":{"routeId":{"$ref":"#/$defs/opaqueId"},"keyId":{"$ref":"#/$defs/opaqueId"}}}},
+    {"if":{"properties":{"type":{"const":"route.notice"}},"required":["type"]},"then":{"required":["rendezvousId","nonce","expiresAt","mode"],"properties":{"rendezvousId":{"$ref":"#/$defs/opaqueId"},"nonce":{"$ref":"#/$defs/base64url32"},"expiresAt":{"type":"string","format":"date-time","maxLength":64},"mode":{"enum":["normal","pairing_provisional"]}}}}
+  ],
+  "additionalProperties": true,
+  "$defs": {
+    "opaqueId":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9._-]+$"},
+    "base64url":{"type":"string","minLength":1,"maxLength":1024,"pattern":"^[A-Za-z0-9_-]+$"},
+    "base64url32":{"type":"string","minLength":43,"maxLength":43,"pattern":"^[A-Za-z0-9_-]{43}$"},
+    "challenge": {
+      "type": "object",
+      "required": ["audience", "routeId", "keyId", "nonce", "expiresAt"],
+      "properties": {
+        "audience":{"enum":["control","route-admin","device-data","mac-data"]},
+        "routeId":{"$ref":"#/$defs/opaqueId"},
+        "keyId":{"$ref":"#/$defs/opaqueId"},
+        "rendezvousId":{"$ref":"#/$defs/opaqueId"},
+        "nonce":{"$ref":"#/$defs/base64url32"},
+        "expiresAt":{"type":"string","format":"date-time","maxLength":64}
+      },
+      "allOf": [
+        {"if":{"properties":{"audience":{"const":"mac-data"}},"required":["audience"]},"then":{"required":["rendezvousId"]}},
+        {"if":{"properties":{"audience":{"enum":["control","route-admin","device-data"]}},"required":["audience"]},"then":{"not":{"required":["rendezvousId"]}}}
+      ],
+      "additionalProperties": false
+    }
+  }
+}

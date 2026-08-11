@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.2
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run terminal:verify
+      - run: npm run fixtures:verify
+      - run: npm run dal:verify
+      - run: npm audit --audit-level=high
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
+      - run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - run: ./gradlew --no-daemon :android:core:update:testDebugUnitTest :android:core:update:lintDebug
+      - run: ./gradlew --no-daemon verifyEnvironment testDebugUnitTest lintDebug assembleDebug assembleRelease
+
+  android-api29:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+      - uses: ReactiveCircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808
+        with:
+          api-level: 29
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          script: ./gradlew --no-daemon :android:app:connectedDebugAndroidTest :android:core:security:connectedDebugAndroidTest :android:core:storage:connectedDebugAndroidTest :android:core:network:connectedDebugAndroidTest :android:core:push:connectedDebugAndroidTest :android:core:voice:connectedDebugAndroidTest :android:core:update:connectedDebugAndroidTest :android:terminal:connectedDebugAndroidTest :android:feature:session:connectedDebugAndroidTest
+
+  terraform:
+    runs-on: ubuntu-latest
+    env:
+      TF_CLI_CONFIG_FILE: ${{ github.workspace }}/infra/terraform/terraformrc
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+        with:
+          terraform_version: 1.15.8
+      - working-directory: infra/terraform
+        run: terraform fmt -check -recursive
+      - working-directory: infra/terraform
+        run: terraform init -backend=false
+      - working-directory: infra/terraform
+        run: terraform validate
+
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: 1.26.2
+          cache-dependency-path: relay/go.mod
+      - working-directory: relay
+        run: go test -race ./...
+      - working-directory: relay
+        run: go vet ./...
+      - run: test -z "$(gofmt -l relay)"

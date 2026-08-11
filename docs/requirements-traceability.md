@@ -1,142 +1,121 @@
 # Requirements traceability
 
-Last updated: 2026-08-09
+Last updated: 2026-08-11
 
-Maps each requirement in [requirements.md](requirements.md) to the stage and ownership lane from [plan.md](plan.md) that delivers it, and to the specific evidence that proves it. Evidence names are planned identifiers; none of this code exists yet.
+Maps each requirement in [requirements.md](requirements.md) to real, runnable evidence. Evidence names are paths in this repository, not planned identifiers. Where a row has no executable evidence it says so.
 
 Status vocabulary, used strictly:
 
-- **planned** — designed and gated, no code, no evidence.
-- **partial** — some evidence exists and is named; the remainder is listed.
-- **satisfied** — all listed evidence exists and has been run.
-- **blocked-external** — this specific evidence requires unavailable physical/account/external state; substitute and weakness named.
+- **verified-unit** — implemented, with green unit/contract tests at the named paths (Node vitest, JVM `testDebugUnitTest`, or Go tests).
+- **verified-instrumentation** — additionally proven on-device by green Android instrumentation results. All current instrumentation evidence is from the API 29 emulator `PiApp_API_29` at serial `emulator-5590` (result XMLs under each module's `build/outputs/androidTest-results/connected/debug/`).
+- **emulator-only** — passes on an emulator; explicitly weaker than physical evidence and never a substitute for a physical gate.
+- **physical-gate-pending** — requires a physical device, external account state, or live ceremony that does not exist here. No emulator substitute satisfies it.
+- **not-implemented** — no code, or code without meaningful test coverage.
 
-Nothing is satisfied by design alone. Since implementation does not exist, all executable evidence is `planned`. A row that mixes planned code with external proof must be split; `blocked-external` may not hide unimplemented work, and a substitute does not make a row `partial`.
+General evidence anchors, not repeated per row:
 
-Identity-bound evidence uses application ID `io.github.verybigsad.pimobile` and passkey RP `verybigsad.github.io`.
-
-## Stage map
-
-| Stage | Deliverable | Lanes | Exit criteria |
-|---|---|---|---|
-| 0 | Contract/security freeze: schemas, fixtures, threat tests, exact invocation manifest, pinned Pi patch/preload, build locks | 0A protocol, 0B security, 0C compatibility, 0D build | Cross-language fixtures cover exact raw lines, content-only thinking end plus signed/redacted authoritative final messages, pairing/approval/blob/dormant commands/idle snapshots; final hook runs last in nested sessions; source counts/paths match; no P0/P1; no cloud resource |
-| 1 | Foundations | 1A Mac runtime, 1B Android core, 1C transport/auth, 1D local relay/infra, 1E compatibility harness | Direct/relayed echo; provisional pairing then mTLS; standing control/one-use data/P-256 cold reconnect; dormant recovery; idle canonical snapshot; API 29 floor; API 28 negative; no cloud apply |
-| 2 | Semantic vertical slice | Mac RPC facade, Android UX/data, approval, compatibility | Full semantic flow; exact raw/blob image flow; known custom paths pre-route and watchdog recovers drift; final-arg nested/direct approval blocks safely including broker loss; no generic approval affordance |
-| 3 | Push, voice, release identity | push, voice, identity | Push/Groq suites; durable RPM/RPD/ASH/ASD, retry and daily/monthly cost guards; live test cleanup; DAL exact package/fingerprint/origin plus both relations and signer migration |
-| 4 | Mandatory terminal compatibility | terminal, compatibility | Rendering/input/custom paths pass; connected xterm keeps 5k lines; reconnect restores visible pane only; bounded capture history is separate; no replay/full-scrollback claim; never two Pi writers |
-| 5 | Cloud, hardening, E2E, release | serial with parallel suites | Reviewed Terraform plan and current cost check; one dedicated VM created with unrelated resources proven unchanged; remote and direct suites pass; release Macrobenchmarks meet budgets; manual emulator and physical-device evidence recorded; SBOM, scans, signed artifacts, destroy and orphan proof; dual final review with all P0/P1 fixed |
+- Node suites (`npm test`, 372 tests/45 files green 2026-08-11): `mac/host/test/`, `protocol/ts/test/`, `mac/approval/test/`, `mac/pi-patch/test/`, `mac/preload/test/`, `scripts/*.test.mjs`.
+- JVM unit suites (545 executions green in the last recorded run — 311 debug + 234 release variant, 0 failures): `android/*/src/test/**`.
+- API 29 instrumentation (113 tests, 0 failures, `emulator-5590`): `android/*/src/androidTest/**`.
+- Go relay suites: `relay/**/…_test.go`, green via `go test ./...`.
+- CI: `.github/workflows/ci.yml` (node, android, android-api29, terraform, go), `dal.yml`, `relay-image.yml`, `secret-scan.yml`, `android-release.yml`.
 
 ## Requirement to evidence
 
-| Req | Stage | Lane / module | Evidence | Status |
-|---|---|---|---|---|
-| R1 pairing | 1, 2 | transport/auth; settings | `CsrFirstPairingTest`, `PairingProvisionalServerAuthTest`, `RegistrationVsAssertionTest`, `ExporterInvitationCsrBindingTest`, `LocalConfirmTest`, `InvitationReplayTest` | planned |
-| R1 session list fidelity | 1, 2 | `mac/host/src/sync`; `android/feature/sessions` | `SessionRegistryIntegrationTest` against real Pi session files | planned |
-| R1 exact resync | 1 | sync; Android protocol | `ActiveGapUnavailableTest`, `IdleMutationFenceTest`, `SingleCanonicalEntriesTest`, `AdjunctCursorTest`, `LeafRecheckRetryTest`, `PostFenceReplayTest`, `ResyncByteIdentityTest` | planned |
-| R1 reconnect durability | 1, 5 | sync; Android core | `ReconnectCycleTest` at 100 cycles | planned |
-| R1 leaf change | 1 | sync | `LeafIdChangeConvergenceTest` | planned |
-| R1 writer lease | 2, 4 | sync; terminal | `WriterLeaseConflictTest`, `ModeHandoffTest` | planned |
-| R1 canonical recovery | 0, 1 | protocol; sync | append ID distinct from leaf, backward-branch no-livelock, concurrent append/leaf retry, post-fence replay | planned |
-| R2 capability coverage | 0, 2 | 0C compatibility; `capability-matrix.md` | `CapabilityCoverageTest` fails when a protocol surface has no matrix row | planned |
-| R2 exact delta assembly | 0, 1 | protocol; codecs | `DeltaAssemblyParityTest`, `ThinkingEndReplacementTest` for carried content and authoritative final signature/redaction | planned |
-| R2 `toolCallId` correlation | 0, 1 | protocol; Mac runtime | `ParallelToolCorrelationTest` | planned |
-| R2 LF-only framing | 0 | protocol; Mac runtime | `FramerUnicodeSeparatorTest`, `FramerCrlfTest`, `OversizeRecordFaultTest` at 16 MiB | planned |
-| R2 gap and epoch discard | 0, 1 | protocol; Android core | `SequenceGapRebuildTest`, `EpochChangeRebuildTest` | planned |
-| R2 raw retention/references | 0, 2 | protocol; Android UX | escaped-frame inline decision, projector parity, 512 MiB/30-day raw ref eviction, digest/unavailable UI | planned |
-| R2 prompt images | 0, 1, 2 | protocol; blob store; composer | `PromptImageReadyRefHashTest`, `BlobOwnershipTest`, `BlobOrphanCrashSweepTest` | planned |
-| R2 steer vs follow-up | 2 | Mac RPC facade; conversation | `StreamingBehaviorSemanticsTest` | planned |
-| R2 accepted vs completed | 2 | conversation | `AcceptedNotCompletedTest` | planned |
-| R2 no proxied TUI commands | 2 | settings | `CommandListSourceTest` asserts the palette comes from live `get_commands` | planned |
-| R3 environment fidelity | 0, 1 | 0C compatibility; 1E harness | `PiManifestIntegrityTest` comparing hosted and terminal package and extension sets | planned |
-| R3 per-extension scenarios | 1, 2, 4 | compatibility | Semantic plus PTY scenario per pinned package and per local extension, generated into the matrix | planned |
-| R3 UI method coverage | 0, 2 | compatibility | `EveryPi084UiMethodClassifiedTest`, structured/widget/ANSI/settlement fixtures | planned |
-| R3 invocation routing | 0, 2, 4 | compatibility | `InvocationManifestCoverageTest`, mandatory `/mcp` `/usage` `/agents` `/btw` `/llama` pre-route, 6/4/3/2/1 source-count check, `UnexpectedCommandWatchdogResyncTest` | planned |
-| R3 approval interception | 0, 2 | Pi patch/preload; approval | `PatchIntegrityTest`, final tool args, resolved-prefix bash, root/nested/`extensions:false`, direct-RPC single-offer tests | planned |
-| R3 approval fail closed | 2 | approval broker | one global offer/FIFO eight, overflow, 30 s queue, 120 s decision, 150 s total boundaries, broker unavailable, stale hash, disconnect, sentinel, safe resume | planned |
-| R3 unsandboxed extension limit | 2 | compatibility/security | `DirectNodeFsSideEffectNotSandboxedTest` plus UX copy assertion | planned |
-| R3 terminal engine | 0, 4 | build; terminal | full integrity/packed/bundle hashes, deterministic build, clone-shim source locator, API 29/34/36 canary, too-old refusal | planned: WebView observed and terminal module builds; xterm canary absent |
-| R3 terminal reconnect/history | 4 | terminal | connected 5k lines, visible-pane reconnect, bounded/truncated separate capture drawer, no replay/full-history copy | planned |
-| R3 no false approval affordance | 2 | conversation, review | `NoGenericApproveAffordanceTest` | planned |
-| R4 screen states | 2, 4 | Android UX | empty/loading/error/offline/revoked, active-gap unavailable, dormant, indeterminate, broker-unreachable | planned |
-| R4 layouts and process death | 2, 4 | Android app | AVD `FoldableStatePreservationTest`, `RotationRestoreTest`, `ProcessDeathRestoreTest` | planned |
-| R4 physical fold transition | 5 | manual | Real foldable transition recording | blocked-external: no physical foldable; resizable AVD is weaker |
-| R4 trust and path visibility | 2 | conversation | `ExecutionTargetVisibleTest` | planned |
-| R4 contrast and non-color state | 4 | design system | `ThemeContrastTest`, `StateNotColorOnlyTest` | planned |
-| R4 accessibility automated/manual | 4, 5 | Android features | `A11ySemanticsTest`, font/announcement tests, emulator TalkBack recording | planned |
-| R4 raw inspector reachable | 2 | conversation | `RawInspectorReachableTest` | planned |
-| R5 benchmark implementation | 2, 5 | benchmark; Android data | frame/startup/memory/retained-growth Macrobenchmarks and datasets | planned |
-| R5 physical budget execution | 5 | manual benchmark | Release build on physical 60 Hz Pixel 7-class+ device | blocked-external: no device; emulator indicative only |
-| R5 latency budgets | 5 | transport; benchmark | `SemanticDeltaLatencyBenchmark`, `CatchUpLatencyBenchmark`, `TerminalEchoLatencyBenchmark` at controlled RTT | planned |
-| R5 no main-thread work | 2, 5 | Android UX | `MainThreadViolationTest` | planned |
-| R5 host and relay footprint | 5 | Mac host; relay | `HostIdleMemoryTest`, `RelayIdleMemoryTest` | planned |
-| R6 no bypass | 0, 3 | 0B security; identity | `NoProductionAuthBypassTest` plus a source scan | planned |
-| R6 DAL test implementation | 3 | identity | Test asserts 200/JSON/no redirect/package/fingerprint, both relations, signed-APK origin, DAL API | planned |
-| R6 live DAL deployment | 3, 5 | identity/manual | Public Pages result and out-of-band fingerprint review | blocked-external: repository/key absent; site 404 |
-| R6 origin/RP derivation code | 0, 3 | security; identity | `AndroidOriginDerivationTest`, `RpIdPinningTest`, signer-overlap migration fixture | planned |
-| R6 real signing identity | 3, 5 | release | Dedicated release cert, backup, signed APK cross-check | blocked-external: release key absent |
-| R6 ceremony verification | 1, 3 | transport/auth | `WebAuthnVerifierTest` covering challenge expiry, replay, UV, UP, counter, credential, and signature | planned |
-| R6 provider matrix | 0, 1 | auth/build | API 29–33 Play-services provider required; API 34+ third-party provider; provider-absent locked/setup state | planned |
-| R6 Bitwarden acceptance | 5 | manual | Physical release-signed Android 14+ device evidence, including Google-disabled/absent mode | blocked-external: no device; emulator fake/GPM providers are weaker |
-| R6 API 29 floor | 0, 1 | build | `MinSdkFloorBuildTest`, `PiApp_API_29`, Linux managed device, API 28 unsupported negative | partial: debug APK builds; API 29 install and API 28 negative not yet run |
-| R7 relay/control auth/privacy | 1, 5 | transport; relay | P-256 cold reconnect/replay/rotation/revoke, one-use data, control loss/restart, DB/log privacy, heartbeat-cost tests | planned |
-| R7 inner confidentiality | 1, 5 | transport/auth | provisional pinned server-auth restrictions, direct/relayed mTLS, `HostileRelayTest` | planned |
-| R7 certificate lifecycle | 1 | transport/auth | five-year CA, 30-day leaves, seven-day renewal, 24-hour overlap; invalid/missing/expired/revoked/live close | planned |
-| R7 deterministic protocol faults | 0, 1 | protocol | `FrameBoundsFaultTest`, `InvalidUtf8FaultTest`, `NoResyncScanTest` | planned |
-| R7 at-most-once journal | 1 | journal | crash matrix; dormant/query/revalidation; 24 h/30 d/365 d/100k retention; capacity; 100 duplicates; ID/hash failures | planned |
-| R7 key storage implementation | 1 | transport/auth; Android security | `NonExportableKeystoreKeyTest`, `WrappedPkcs8PermissionsTest` on emulator | planned |
-| R7 physical key behavior | 5 | manual | hardware backing/invalidation evidence | blocked-external: emulator differs; no device |
-| R7 redaction | 0, 1 | security; all modules | `LogRedactionTest`, `CrashPathRedactionTest`, `TerminalByteRedactionTest` | planned |
-| R8 notification transport needs no FCM | 3 | push | FCM absent, UnifiedPush connector/fake distributor and opaque wake tests | planned |
-| R8 no-Google AVD smoke | 0, 3 | build; push/E2E | `PiApp_API_34_AOSP_UI` UI/push with fake auth plus headless `PiApp_API_34_AOSP` transport | planned: both AVDs installed and debug APK builds; smoke not run |
-| R8 physical full no-Google smoke | 5 | manual | Android 14+ release app + Bitwarden provider + ntfy with Google disabled/absent | blocked-external: no device |
-| R8 settle-only wake | 3 | Mac notifications | `WakeOnSettledOnlyTest` asserting no wake on `agent_end` with `willRetry` | planned |
-| R8 opaque payload | 3 | Mac notifications | `WakePayloadOpacityTest` including the distributor size cap | planned |
-| R8 forged wake grants nothing | 3 | push | `ForgedWakeNoAuthorityTest` | planned |
-| R8 dedupe and catch-up | 3 | Android notifications, data | `DuplicateSettleSuppressionTest`, `AppOpenCatchUpAuthoritativeTest` | planned |
-| R8 no distributor path | 3 | settings | `NoDistributorGuidanceTest` | planned |
-| R8 emulator Doze simulation | 3, 5 | push/E2E | adb Doze/standby suite with explicit serial | planned |
-| R8 physical Doze/OEM behavior | 5 | manual | physical soak | blocked-external: no device/OEM policy |
-| R9 key containment | 3 | voice | `GroqKeyNeverSerializedTest`, permission check on `~/.groq_key` | planned |
-| R9 VAD boundaries | 3 | voice | `VadPreRollTest`, `PreferredBoundaryAt8sTest`, `ForcedCutAt12sTest`, `OverlapWindowTest` | planned |
-| R9 ordering and merge | 3 | voice | `OrderedEmissionTest`, `SeamMergeTest`, `OneInFlightTwoQueuedTest` | planned |
-| R9 draft isolation | 3 | `android/feature/voice` | `TranscriptDraftDoesNotOverwriteTypedTextTest`, `TranscriptNotAutoSentTest`, `VoiceCancelDiscardsTest` | planned |
-| R9 failure/retry matrix | 3 | voice | silence/format/network; 429 seconds/date/missing/malformed/>120 s; monotonic/jitter/three-retry cap; backlog/temp cleanup | planned |
-| R9 durable rate limits | 3 | voice | concurrent pre-send reservations, restart persistence, 18 RPM/1,800 RPD/6,480 ASH/25,920 ASD exact rolling boundaries | planned |
-| R9 billing/budgets | 3 | voice | encoded overlap/retry, 10 s minimum, `$0.04` formula, `$0.25` UTC-day/`$2` UTC-month reject/rollover/UI | planned |
-| R9 live transcription | 3 | voice | One bounded opt-in live Groq test reading the key on Mac only; reserve limits/budget and clean temp data | planned |
-| R9 real microphone | 5 | manual | Physical device dictation | blocked-external |
-| R10 direct LAN operation | 1 | transport | `DirectLanPathTest` | planned |
-| R10 one VM isolation | 5 | infra | fmt/validate/policy/JSON plan/unrelated before-after proof | planned |
-| R10 relay state/privacy | 1, 5 | relay | only public-key/revocation persistence, no payload/private bearer, DB/log inspection, control idle cost | planned |
-| R10 cost gate and destroy proof | 5 | infra | Current calculator record, budget alerts, destroy and orphan scan | planned |
-| R10 lock file committed | 0, 5 | infra | `.terraform.lock.hcl` tracked; explicit `!**/.terraform.lock.hcl`; state/vars ignored | planned: ignore rule exists, lock does not |
-| R11 suites exist and parity holds | 0-5 | CI | Full non-manual suite green; Kotlin and TypeScript fixture parity gate | planned |
-| R12 reproducible builds | 0, 5 | build | Wrapper/catalog locks, Pi package integrity+patch hash/source locator, xterm/node-pty npm integrity + packed/bundle hashes and deterministic build, SBOM/licenses/secrets, Apple-Silicon packaged native smoke, signed artifacts | planned |
-| R13 docs currency | continuous | integration | Docs, ADRs, and traceability updated in the same commit | partial: current through Stage 0 scaffold; remains continuous |
+| Req | Evidence | Status |
+|---|---|---|
+| R1 pairing ceremony (CSR-first, provisional server-auth, exporter binding) | `mac/host/test/security-ceremony.test.ts`, `mac/host/test/pairing-invitation.test.ts`, `mac/host/test/security-pki.test.ts`, `mac/host/test/inner-tls.test.ts`, `mac/host/test/direct-tls.test.ts`; Android: `android/core/network/src/test/.../PairingOrchestratorTest.kt`, `RelayPairingClientTest.kt`, `TlsExporterAndroidTest.kt` (instrumented) | verified-instrumentation (emulator-only for Android TLS paths) |
+| R1 session list fidelity | `mac/host/test/session-service.test.ts`, `mac/host/src/daemon/session-service.ts` | verified-unit |
+| R1 exact resync / idle fence / canonical snapshot | `mac/host/test/canonical-snapshot.test.ts`, `mac/host/test/gateway-sync.test.ts`, `mac/host/src/sync/canonical-snapshot.ts` | verified-unit |
+| R1 reconnect durability | `mac/host/test/relay-tunnel.test.ts`, `android/core/network/src/test/.../PathAndReconnectTest.kt`; 100-cycle soak not implemented | partial verified-unit; soak **not-implemented** |
+| R1 leaf change convergence | covered within `canonical-snapshot.test.ts` fixtures | verified-unit |
+| R1 writer lease / mode handoff | `mac/host/src/daemon/terminal-runtime.ts`, `mac/host/test/terminal-backend.test.ts` | verified-unit |
+| R1 canonical recovery (append id vs leaf, backward branch) | `mac/host/test/canonical-snapshot.test.ts` | verified-unit |
+| R1 revocation kills sessions | `mac/host/test/security-revocation.test.ts`, `mac/host/src/daemon/daemon.ts` (`devices.revoke` → cert + route-key + relay revoke) | verified-unit |
+| R2 capability coverage / matrix drift gate | `protocol/catalog/`, `docs/capability-matrix.md`; generated matrix drift test **not-implemented** | partial; drift gate not-implemented |
+| R2 exact delta assembly | `mac/host/test/pi-core.test.ts` (delta assembler, LF framer, raw projector), `mac/host/src/pi/delta-assembler.ts`, `lf-json-framer.ts` | verified-unit |
+| R2 `toolCallId` correlation | `mac/host/test/pi-core.test.ts` | verified-unit |
+| R2 LF-only framing / oversize fault | `mac/host/test/pi-core.test.ts`, `mac/host/test/gateway-framing.test.ts` | verified-unit |
+| R2 gap/epoch discard | `mac/host/test/gateway-sync.test.ts`, `android/core/protocol/src/test/.../PimbFixtureTest.kt` | verified-unit |
+| R2 raw retention/references | `mac/host/test/pi-core.test.ts`, `mac/host/test/host-store.test.ts`, `protocol/ts/test/pimb.test.ts` | verified-unit |
+| R2 prompt images / blob flow | `mac/host/src/daemon/blob-store.ts`, `mac/host/test/daemon-composition.test.ts`; full orphan-sweep matrix partial | verified-unit (partial matrix) |
+| R2 steer vs follow-up / accepted-not-completed / no proxied TUI commands | `mac/host/test/gateway-command.test.ts`, `mac/host/test/agent-tracker.test.ts`, `mac/host/test/session-service.test.ts` | verified-unit |
+| R3 environment fidelity / full-dist-tree Pi integrity | `mac/pi-patch/test/patch.test.ts`, `mac/pi-patch/test/runtime.test.ts`, `mac/pi-patch/manifest/pi-0.84.0.json` | verified-unit |
+| R3 per-extension scenarios (semantic + PTY per package/local extension) | harness scaffold in `mac/compatibility/`; scenario suite **not-implemented** | not-implemented |
+| R3 UI method coverage | `protocol/catalog/`, `docs/capability-matrix.md` | verified-unit (catalog), full fixture coverage partial |
+| R3 invocation routing / pre-route / watchdog | `mac/compatibility/src/index.ts`, `mac/host/test/session-service.test.ts` | partial verified-unit |
+| R3 approval interception (patch, preload, broker) | `mac/pi-patch/test/*.ts`, `mac/preload/test/preload.test.ts`, `mac/approval/test/broker.test.ts` | verified-unit |
+| R3 approval fail-closed boundaries (FIFO 8, 30/120/150 s) | `mac/approval/test/broker.test.ts`; Android deadline UI: `android/feature/session/src/test/.../ApprovalOfferDeadlineTest.kt` | verified-unit |
+| R3 unsandboxed extension limit | documented in `docs/security.md`; explicit fixture **not-implemented** | not-implemented |
+| R3 terminal engine (deterministic bundle, canary, shim) | `scripts/build-terminal.mjs`, `scripts/terminal-assets.test.mjs`, `android/terminal/web/asset-manifest.json`; `android/app/src/androidTest/.../TerminalCanaryTest.kt` green on API 29 emulator | verified-instrumentation (API 29 only; API 34/36 lanes unverified) |
+| R3 terminal reconnect/history | `mac/host/test/terminal-history-runtime.test.ts`, `android/terminal/src/androidTest/.../TerminalRuntimeInstrumentedTest.kt` | verified-instrumentation (API 29 only) |
+| R3 no false approval affordance | `android/feature/session/src/.../ApprovalOfferSheet.kt`, unit state tests | verified-unit |
+| R4 screen states (empty/loading/error/offline/revoked/dormant/indeterminate) | `android/feature/session/src/test/**`, `SessionStatusErrorTest.kt`, `SessionUiStateTest.kt`; instrumentation: `SessionScreensTest.kt`, `SessionStatusSurfacesTest.kt` | verified-instrumentation (emulator-only) |
+| R4 layouts / rotation / process death | `android/core/push/src/androidTest/.../ColdProcessRestoreTest.kt`; foldable/rotation matrix partial | partial; foldable **physical-gate-pending** |
+| R4 trust and path visibility | `android/feature/session`, status surfaces tests | verified-unit |
+| R4 contrast / non-color state / accessibility | `android/feature/session/src/androidTest/**`, `SettingsScreenComposeTest.kt`; TalkBack manual evidence **physical-gate-pending** | verified-instrumentation partial (emulator-only) |
+| R4 raw inspector | session timeline tests (`TimelinePresentationTest.kt`) | verified-unit |
+| R5 benchmark implementation + physical budgets | no Macrobenchmark suite in tree | not-implemented / physical-gate-pending |
+| R5 latency/host/relay footprint | not implemented | not-implemented |
+| R6 no auth bypass | `mac/host/test/security-*.test.ts`, `android/core/security/src/test/**`; CI secret scan `secret-scan.yml` | verified-unit |
+| R6 DAL | `scripts/verify-dal.mjs`, `scripts/verify-dal.test.mjs`, `.github/workflows/dal.yml`; live 200/JSON/no-redirect + both relations verified | verified-unit + live check green; independent fingerprint review **physical-gate-pending** |
+| R6 origin/RP derivation | `scripts/verify-release-identity.mjs`, `mac/host/test/security-webauthn-options.test.ts`, `android/core/security/src/test/.../PasskeyPolicyTest.kt` | verified-unit |
+| R6 real signing identity | `scripts/release-signing-env`, local v3-signed APK digest matches live DAL | verified-unit; off-machine backup/rotation drill **physical-gate-pending** |
+| R6 ceremony verification (challenge/replay/UV/UP/counter) | `mac/host/test/security-webauthn.test.ts`, `security-webauthn-options.test.ts` | verified-unit |
+| R6 provider matrix (API 29–33 Play services, 34+ third-party) | `android/core/security/src/androidTest/.../PasskeyProviderApi29Test.kt` green on API 29 emulator | verified-instrumentation (API 29 only; API 34+ third-party provider **physical-gate-pending**) |
+| R6 Bitwarden acceptance | no physical device | physical-gate-pending |
+| R6 API 29 floor / API 28 negative | API 29 instrumentation green (113 tests, `emulator-5590`); CI lane `android-api29` | verified-instrumentation (emulator-only) |
+| R7 relay/control auth & privacy | `relay/internal/auth/proof_test.go`, `relay/internal/httpapi/*_test.go`, `relay/internal/rendezvous/rendezvous_test.go`, `mac/host/test/relay-*.test.ts` | verified-unit (cloud deploy not applied) |
+| R7 inner confidentiality (pinned pairing, mTLS, hostile relay) | `mac/host/test/inner-tls.test.ts`, `direct-tls.test.ts`, `android/core/network/src/test/.../TlsTransportTest.kt`, `TlsHandshakeCarryoverTest.kt` | verified-unit; hostile-relay end-to-end **not-implemented** |
+| R7 certificate lifecycle | `mac/host/test/security-pki.test.ts`, `tls-material.test.ts`, `android/core/security/src/androidTest/.../DeviceCertificateStoreTest.kt` | verified-instrumentation partial |
+| R7 deterministic protocol faults | `protocol/ts/test/fuzz.test.ts`, `pimb.test.ts`, `conformance.test.ts`, `android/core/protocol/src/test/**` | verified-unit |
+| R7 at-most-once journal | `mac/host/test/journal.test.ts` (crash matrix, dormant recovery, duplicates) | verified-unit |
+| R7 key storage | `mac/host/test/security-key-storage.test.ts`, `android/core/security/src/androidTest/.../DeviceKeysTest.kt` | verified-instrumentation (emulator-only); hardware backing **physical-gate-pending** |
+| R7 redaction | `mac/host/test/*` redaction assertions; terminal-byte redaction covered in terminal tests | verified-unit (partial) |
+| R8 UnifiedPush, no FCM | `android/core/push/src/test/**` (7 unit suites), `android/core/push/src/androidTest/**` (4 instrumented suites, green API 29), `mac/host/test/admin-push.test.ts` | verified-instrumentation (emulator-only) |
+| R8 no-Google AVD smoke | `PiApp_API_34_AOSP_UI`/`PiApp_API_34_AOSP` lanes defined; executed no-Google suite **not-implemented** | not-implemented |
+| R8 physical no-Google | — | physical-gate-pending |
+| R8 settle-only wake / opaque payload / forged wake | `mac/host/test/admin-push.test.ts`, `android/core/push/src/test/.../OpaqueWakePayloadTest.kt` | verified-unit |
+| R8 dedupe / catch-up / no-distributor path | `WakeReceiptStoreTest.kt`, `WakeReconnectWorkerTest.kt` (instrumented), `UnifiedPushRuntimeTest.kt` | verified-instrumentation (emulator-only) |
+| R8 Doze (emulator simulation / physical) | adb Doze suite **not-implemented**; physical soak **physical-gate-pending** | not-implemented / physical-gate-pending |
+| R9 key containment | `mac/host/test/voice.test.ts`, `voice-gateway-runtime.test.ts`; `~/.groq_key` mode `0600` verified | verified-unit |
+| R9 VAD boundaries / ordering / merge | `mac/host/test/voice.test.ts`, `android/core/voice/src/test/.../VadVoiceChunkerTest.kt`, `VoiceBoundaryTest.kt` | verified-unit |
+| R9 draft isolation / no auto-send | `android/core/voice/src/test/.../VoiceTranscriptTest.kt`, `VoiceCaptureControllerTest.kt`; instrumented `VoiceTranscriptGateInstrumentedTest.kt` | verified-instrumentation (emulator-only) |
+| R9 failure/retry matrix, durable rate limits, billing/budgets | `mac/host/test/voice.test.ts` (rate ledger, 429, budgets) | verified-unit |
+| R9 live transcription (opt-in) | not run here | not-implemented (external) |
+| R9 real microphone | `AndroidAudioRecordSourceTest.kt` instrumented on emulator; physical dictation | emulator-only / physical-gate-pending |
+| R10 direct LAN | `mac/host/test/direct-tls.test.ts`, `android/core/network/src/test/.../TlsTransportTest.kt` | verified-unit |
+| R10 one-VM isolation / cost gate / destroy proof | `infra/terraform/` (validation `max_monthly_cost_rub ≤ 1500` in `main.tf`/`variables.tf`), terraform CI job `fmt/validate`; no apply yet, so no before/after or destroy proof | partial; apply evidence not-implemented |
+| R10 relay state/privacy | `relay/internal/registry/registry_test.go`, `relay/internal/httpapi/*_test.go` | verified-unit |
+| R10 lock file committed | `.terraform.lock.hcl` handling per `infra/terraform/` + `.gitignore` | verified (static) |
+| R11 suites exist / cross-language parity | `protocol/ts/test/conformance.test.ts` + `android/core/protocol/src/test/.../ConformanceFixtureTest.kt` against shared `protocol/fixtures/pimb-v1.json`; CI runs both | verified-unit |
+| R12 reproducible builds / supply chain | `scripts/terminal-assets.test.mjs` (deterministic bundle), `verify-release-identity.mjs`, `secret-scan.yml`, `relay-image.yml` (digest-pinned cosign-signed image), SBOM job partial | partial verified-unit |
+| R12 assisted self-update | `android/core/update/src/test/**` (7 unit suites), `android/core/update/src/androidTest/**` (instrumented API 29), `scripts/generate-update-metadata.mjs` + test, ADR-0020 | verified-instrumentation (emulator-only); live rollout **not-implemented** |
+| R13 docs currency | this document regenerated from the tree 2026-08-11 | continuous |
 
 ## Approval gate traceability
 
-Called out separately because Pi itself has no approval boundary; the bridge protocol and patched final hook must prove enforcement together.
-
-| Claim | Proof |
-|---|---|
-| Final interception | Patch integrity/source locator; final tool args plus resolved `executeBash` in root/nested/`extensions:false`; direct RPC offers once; bridge actions gate |
-| Operation did not run | Sentinel absent before Allow and after Deny/disconnect/deadline/broker loss |
-| User saw final truth | `approval.offer` exact final operation/cwd/resource/ID/hash/policy/expiry matches interceptor |
-| Failure resumes safely | Overflow, 30 s queue timeout, 120 s decision expiry, 150 s cap, unreachable/malformed/stale response all block and Pi continues |
-| Allow is single-use | Decision tuple consumed once; repeat prompts |
-| No false assurance | No Pi `confirm` or generic approval label; direct Node/fs fixture proves and documents non-sandbox limit |
+| Claim | Proof | Status |
+|---|---|---|
+| Final interception | `mac/pi-patch/test/patch.test.ts`, `runtime.test.ts`; preload `mac/preload/test/preload.test.ts` | verified-unit |
+| Operation did not run before allow | `mac/approval/test/broker.test.ts` (block/deny/timeout paths) | verified-unit |
+| User saw final truth | `approval.offer` payload tests in `mac/approval/test/broker.test.ts`, Android `ApprovalOfferDeadlineTest.kt` | verified-unit |
+| Failure resumes safely | broker timeout/overflow/disconnect tests | verified-unit |
+| Allow is single-use | broker decision-consumption tests | verified-unit |
+| No false assurance | no generic approve affordance; `docs/security.md` documents non-sandbox limit | verified-unit |
+| Live end-to-end approval on a physical device | — | physical-gate-pending |
 
 ## External gap register
 
 | Gap | Requirements | Why it cannot be closed here | Substitute and its weakness |
 |---|---|---|---|
-| No physical Android device | R4/R5/R6/R7/R8/R9 physical rows | No real third-party provider/hardware/OEM/representative timing | API 29/34/36 Google APIs plus API 34 default/AOSP ATD, fake auth/audio, adb Doze; weaker |
-| No public account Pages repository or live DAL | R6, R10 | Requires creating and publishing `VeryBigSad/verybigsad.github.io` with `.nojekyll` and the DAL file | Pattern verified against a production GitHub Pages host serving `assetlinks.json` as `application/json` with 200 and no redirect |
-| No dedicated release signing key | R6, R12 | Fingerprint/origin and signer-rotation drill require it; signer compromise is residual | None; hard prerequisite |
+| No physical Android device | R4/R5/R6/R7/R8/R9 physical rows | No real third-party provider/hardware/OEM/representative timing | API 29 emulator evidence (113 green tests, `emulator-5590`); weaker — never claimed as physical |
+| API 34+ emulator lanes unexecuted | R6/R8 and full terminal matrix | Only API 29 instrumentation has recorded green results | API 34/36 AVDs installed; runs pending |
+| Release-key backup/cross-check incomplete | R6, R12 | Bitwarden is locked and physical release ceremony absent | Local mode-0600 EC keystore + Keychain + published fingerprint; not sufficient backup |
+| No cloud resource created | R8 remote delivery, R10 | Intentional until Stage 5; relay/ntfy remote path unproven | Local Go relay tests only |
 
 ## Local/intentional gaps, not blocked-external
 
 - No Firebase credentials: intentional; optional FCM is not a release gate.
-- No cloud resource: intentional until Stage 5; local relay/ntfy tests remain planned.
 - Sleeping/offline Mac: inherent product limitation, not missing evidence.
+- Macrobenchmark/performance suite not yet implemented (R5) — this is missing work, not an external block.

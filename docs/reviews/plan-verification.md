@@ -1,7 +1,7 @@
 # Corrected plan verification
 
-Last updated: 2026-08-09
-Verdict: **GO to contract freeze; NO-GO to release/cloud apply until listed external and physical-device gates close**
+Last updated: 2026-08-11
+Verdict: **Stages 0–4 implemented and locally verified; NO-GO to release/cloud apply until the external, physical-device, and Stage 5 gates below close**
 
 Two reviewers examined the initial plan, followed by PTY/push/passkey-relay spikes and two final reviews. The final-audited plan adopts every P0/P1 and sensible P2. This record preserves superseded/rejected findings rather than rewriting history.
 
@@ -21,7 +21,7 @@ Disposition labels:
 - Node 22 arm64 spawned node-pty after executable-helper correction; tmux 3.5a was present.
 - The PTY spike passed truecolor, Unicode width, synchronized output, resize, reconnect/redraw, bracketed paste, SGR mouse, modified keys, and a real key-release custom UI. Android IME/hardware-key evidence was not produced.
 - UnifiedPush/ntfy inspection confirmed arbitrary-app distributor registration, raise-to-foreground handoff, self-hosting, and an FCM-free notification path. Full production no-Google use additionally needs Android 14+ and a third-party passkey provider; OEM/Doze and provider evidence remain physical.
-- Public-suffix and origin-library checks confirmed `verybigsad.github.io` is a valid RP, `github.io` is not, and exact Android origins can be pinned separately from RP ID. The root site/DAL returned 404 and the account Pages repository did not exist.
+- Public-suffix and origin-library checks confirmed `verybigsad.github.io` is a valid RP, `github.io` is not, and exact Android origins can be pinned separately from RP ID. At that review the root site/DAL returned 404 and no account Pages repository existed; P0 T3-1 records the later resolution.
 - Current machine confirms Android platforms/images/AVDs 28/29/34/36, build-tools 36.0.0, Node 22, and `~/.groq_key` mode `0600`. API 29/34/36 Google APIs, API 34 no-Google default UI and AOSP ATD AVDs exist; API 28 is negative-only.
 
 ## Reviewer A — technical feasibility
@@ -75,7 +75,7 @@ The extension audit behind B-P0-3 found: structured fallback works for `rpiv-ask
 | B-P1-5 | Voice/user editing and cost semantics undefined; appending partials could overwrite user text. | **Resolved.** Voice occupies a separate transcription draft; ordered partials do not mutate manually typed text; final transcript is inserted editable and never auto-sent. 8–12 s cadence, all rate windows, retry accounting, and hard cost budgets are explicit. |
 | B-P1-6 | PTY decision/licensing unresolved. | **Superseded by PTY spike.** Terminal is mandatory, xterm path chosen, Termux rejected, exact licenses/notices and physical evidence gate recorded. |
 | B-P1-7 | Direct/relay and VM ownership unresolved; unrelated large VM existed. | **Resolved.** Opportunistic direct LAN + relay remote path; exactly one new dedicated Terraform VM; unrelated VM reuse/import/mutation forbidden. |
-| B-P1-8 | No RP domain; reviewer proposed biometric-first/passkey-later. | **Partly rejected, otherwise external gate.** Account Pages RP was validated, so passkey remains a 1.0 requirement rather than follow-on. There is no weaker production biometric bypass. Required Pages repo/DAL/key are hard release prerequisites. |
+| B-P1-8 | No RP domain; reviewer proposed biometric-first/passkey-later. | **Partly rejected, otherwise external gate.** Account Pages RP was validated, so passkey remains a 1.0 requirement rather than follow-on. There is no weaker production biometric bypass. Pages repo/DAL/key were hard prerequisites; they now exist, while local APK digest and live DAL/API now match; independent review, backup, and rotation evidence remain. |
 | B-P1-9 | No AVD/SDK and Bitwarden/Doze/voice realism. | **Corrected.** API 29/34/36 Google APIs, API 34 no-Google default/AOSP ATD, and API 28 negative AVDs exist. AOSP uses fake auth; physical provider/Doze/voice gates remain. |
 | B-P1-10 | Initial stage fan-out depended on unfrozen protocol/security decisions. | **Resolved.** Stage 0 freezes schemas/fixtures/security/contracts and dual-review gate before parallel foundations. Exclusive path ownership prevents conflicting edits. |
 
@@ -116,7 +116,7 @@ Verdict: RP/Mac verifier/one-VM relay feasible; final plan intentionally selecte
 
 | Rank/ID | Finding/evidence | Disposition |
 |---|---|---|
-| P0 T3-1 | `github.io` is a public suffix; `verybigsad.github.io` is a valid RP. Root DAL currently 404; account Pages repo absent. | **External gate.** RP fixed correctly; create account Pages repo with `.nojekyll`, deploy root DAL, verify 200/MIME/no redirect/fingerprint before release. |
+| P0 T3-1 | `github.io` is a public suffix; `verybigsad.github.io` is a valid RP. Root DAL was 404; repo absent. | **Resolved 2026-08-09.** Public repo + `.nojekyll`; live 200 JSON/no redirect; signed APK digest and both DAL API relations match. Independent fingerprint review remains. |
 | P0 T3-2 | Android origin and DAL fingerprint are different encodings; verifier endpoint hostname need not equal RP. | **Resolved.** Build derives both from one dedicated release cert; Mac pins exact Android origin and RP; verifier stays on Mac. |
 | P0 T3-3 | Hand-rolled AES-GCM is unsafe; spike recommended audited Noise and said fallback to nested TLS if cross-platform vectors fail. | **Superseded.** Custom AEAD remains rejected. Final plan chooses standard TLS 1.3 mTLS because Android nested-TLS feasibility was already demonstrated and it avoids introducing/auditing shared Rust Noise bindings. WSS is rendezvous/proxy traversal only. |
 | P0 T3-4 | Naive request retry/dedup cannot claim exactly once. | **Resolved with A-P0-1.** No retry of uncertain mutation; durable fail-closed journal. |
@@ -162,12 +162,13 @@ Date: 2026-08-09. Verdict: **all review P0/P1 and sensible P2 have a design disp
 
 ## Remaining release blockers
 
-No unresolved architectural P0/P1 remains. These evidence gates legitimately remain:
+No unresolved architectural P0/P1 remains. Implementation gates from earlier revisions are now closed: codecs, the pinned Pi patch/preload/broker, relay/auth/pairing, journal/snapshot/blob suites, and the invocation/terminal matrix all exist with green unit suites, and API 29 instrumentation passes on `emulator-5590` (113 tests). These evidence gates legitimately remain:
 
-1. Public Pages repo/DAL with both relations, dedicated release signer, out-of-band fingerprint and rotation evidence.
-2. Physical Bitwarden/input/microphone/Keystore/ntfy/Doze/OEM evidence.
-3. Implemented codecs, pinned Pi patch/preload/broker, relay/auth/pairing, journal/snapshot/blob suites, invocation/terminal matrix, and executed no-Google AVD lanes (images now installed).
-4. Reviewed Terraform plan/cost and isolated creation of the one dedicated VM.
-5. Final dual review after implementation and fixes.
+1. Independent DAL/signing fingerprint review, release-key off-machine backup, account protection, and rotation evidence.
+2. Physical Bitwarden/input/microphone/Keystore/ntfy/Doze/OEM evidence. API 34+ and no-Google AVD lanes also still lack executed runs.
+3. Macrobenchmark/performance suite (R5) is not implemented; budgets are unverified assertions.
+4. Reviewed Terraform plan/cost and isolated creation of the one dedicated VM, plus remote relay/ntfy E2E.
+5. SBOM/licenses supply-chain job, signed release artifacts, and destroy/orphan proof.
+6. Final dual review of the as-built system and fixes.
 
 Cloud apply or 1.0 release before those gates is a no-go.

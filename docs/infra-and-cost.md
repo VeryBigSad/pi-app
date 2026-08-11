@@ -1,7 +1,7 @@
 # Infrastructure and cost
 
-Last updated: 2026-08-09
-Status: plan only; no project cloud resources created
+Last updated: 2026-08-11
+Status: implemented as Terraform + hardened cloud-init (`infra/terraform/`); `fmt`/`validate` pass in CI. **No project cloud resources created.**
 
 ## Decision
 
@@ -11,9 +11,9 @@ GitHub Pages separately serves `verybigsad.github.io/.well-known/assetlinks.json
 
 ## Terraform shape
 
-`infra/terraform` owns a dedicated state and must create:
+`infra/terraform` owns a dedicated state and creates:
 
-- `standard-v3`, 2 vCPU, 20% core fraction, 2 GiB RAM;
+- `standard-v4a`, 2 vCPU, 20% core fraction, 2 GiB RAM;
 - 10–13 GiB network HDD;
 - reserved public IPv4;
 - dedicated service account with only required read/metrics permissions;
@@ -21,6 +21,8 @@ GitHub Pages separately serves `verybigsad.github.io/.well-known/assetlinks.json
 - Ubuntu LTS image pinned by family plus resolved image ID recorded at apply;
 - budget/monitoring resources where supported;
 - DNS hostname using the reserved IP through `sslip.io` unless a user-owned domain is supplied before apply.
+
+A hard cost gate is enforced in code: `monthly_cost_estimate_rub` must not exceed `max_monthly_cost_rub` (default **₽1,500**); `main.tf` fails validation with an explicit error otherwise, and the cap can only be raised deliberately.
 
 Public ingress:
 
@@ -54,18 +56,20 @@ Pin Terraform/YC provider versions and commit `.terraform.lock.hcl`. `.gitignore
 
 ### ntfy
 
-- Pinned container, separate Unix user and storage.
-- `auth-default-access: deny-all`.
-- Required high-entropy UnifiedPush `up*` namespace write access only.
-- Persistent bounded cache so VM restart does not immediately lose queued wakes.
-- Per-topic/IP publish rate limits and retention limits.
-- No session names or plaintext results; UnifiedPush payload is opaque/encrypted wake data.
+- Pinned container, dedicated nonroot user (65533) and storage.
+- `auth-default-access: deny-all`; only the provisioned `pimobile` publisher account exists, with an ACL scoped to the UnifiedPush `up*` topic namespace (`ntfy access pimobile 'up*' rw`) — no other topics are writable.
+- `behind-proxy: true` (Caddy terminates TLS), web UI disabled (`web-root: disable`, `enable-login: false`), 4K message-size limit, 12h bounded persistent cache, global topic limit 500, visitor burst/replenish/daily/subscription rate limits, `log-level: warn`.
+- No session names or plaintext results; UnifiedPush payload is an opaque bounded wake.
 
-systemd manages all pinned containers with restart limits, health checks, resource limits, read-only root filesystems where feasible, and dedicated data directories. Logs rotate and redact tickets/topics/query strings.
+### Hardened container stack (cloud-init)
+
+`cloud-init.yaml.tftpl` renders a docker-compose stack where **every service runs as a dedicated nonroot UID** (relay 65532, ntfy 65533, Caddy 65534) with `read_only: true`, `no-new-privileges`, `cap_drop: [ALL]`, tmpfs `/tmp`, per-service resource limits (pids/memory/cpus), JSON-log rotation, and an HTTP `healthcheck` each. Package versions (docker.io, compose, openssl, curl) are pinned in cloud-config.
+
+Image trust: the relay image is cosign-verified at boot against a pinned policy (`/etc/pimobile/cosign-policy`, keyless identity `VeryBigSad/pi-app/.github/workflows/relay-image.yml`, issuer `token.actions.githubusercontent.com`). Updates go through `/usr/local/sbin/pimobile-update` + `pi-mobile-update.service`: stage signed image references, apply via systemd, health-check, and **automatic rollback to the previous image set** if unhealthy (`infra/local/verify-relay-image.sh` exercises the verification path locally).
 
 ## Secret bootstrap
 
-Cloud-init contains no long-lived application secret. On first boot an authenticated operator flow registers the Mac's route P-256 public key; private keys remain in Mac Keychain. Relay service/admin bootstrap material stays local with restrictive permissions and retrieval disables itself. Device route public keys register only after completed pairing.
+Cloud-init contains no long-lived application secret. Bootstrap is atomic: a mode-`0700` staging directory prepares bootstrap token, relay token, and ntfy password (`0600`, per-service ownership), preconditions abort rather than regenerate an existing credential set, and `mv -f` renames publish everything in one step. On first boot an authenticated operator flow registers the Mac's route P-256 public key; private keys remain in Mac Keychain. Relay service/admin bootstrap material stays local with restrictive permissions and retrieval disables itself. Device route public keys register only after completed pairing.
 
 Never put these in Terraform variables/state, GitHub Actions logs, images, or repository files:
 
@@ -85,7 +89,7 @@ Before `apply`:
 2. Confirm Terraform state contains only `pi-mobile-*` resources.
 3. Review `terraform show -json plan.bin` and reject update/delete/import/data-source references to unrelated compute resources.
 4. Confirm unique names/labels, region/zone, CIDR, image ID, container digests, and cost estimate.
-5. Stop if estimated fixed monthly cost exceeds ₽1,500 before variable egress without explicit user approval.
+5. Stop if estimated fixed monthly cost exceeds ₽1,500 before variable egress without explicit user approval — enforced by the `max_monthly_cost_rub` validation, not just by review.
 
 After `apply`, prove every pre-existing recorded resource is unchanged. After `destroy`, prove only the dedicated state resources disappeared and no disk, address, snapshot, DNS record, service account, security group, or budget alert was orphaned.
 
@@ -164,6 +168,6 @@ Rejected alternatives:
 ## External prerequisites
 
 - YC `default` profile is authenticated and has an active billing account, but no resource is created until Stage 5.
-- A release signing key/fingerprint and public `VeryBigSad/verybigsad.github.io` repository are still required.
+- Dedicated release certificate and public Pages repository now exist; local signed APK matches the live 200/no-redirect DAL and Google API resolves both relations; independent review, off-machine key backup, and rotation drill remain.
 - A user-owned domain is optional; `sslip.io` is acceptable for relay TLS, not the passkey RP.
 - Operator CIDR and final YC zone are apply-time inputs.

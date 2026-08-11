@@ -1,0 +1,22 @@
+{
+  "xtermVersion": "6.1.0-beta.292",
+  "xtermIntegrity": "sha512-17zqK5tM/l6qeD7McF42OrEJ6w3XqJ2vFVKdWqu0cYLzdFqMWAHp2oFNc8Fj5DmqDSl1E1FZEg6IFflDllTvLA==",
+  "xtermPackedSha256": "66cd04723b96a17ce85027f3f9480d4398a134db1f5cd359784a01dbc2c05510",
+  "target": "chrome91",
+  "structuredCloneShim": {
+    "path": "android/terminal/web/src/compat.ts",
+    "sha256": "08b45b37480b8c1385ed9b16fc7603fdb72adc7b2cb1e686b29bc3eaa03d585e",
+    "upstreamSourceLocator": {
+      "path": "node_modules/@xterm/xterm/src/common/services/CoreService.ts",
+      "sha256": "aaf01c339fb7cb80f1f21e126633f708e74844e0c408b3143d11d5e6ad229e26",
+      "callSites": 4
+    }
+  },
+  "files": {
+    "terminal.js": "b693a240a67bdcf6494a1f5d21681ee82c8acecfa370c957dd0a370dc5f3da7d",
+    "index.html": "b4eff97f32c979588bbde71c01ad76eac5e6742d2bee3f26c0c9e14dda453b00",
+    "terminal-shell.css": "0acccf618eeaf65182ade411a823cce1245a092ba08a88ee84078e16d6f4779a",
+    "xterm.css": "4d9a1d50808997f097ccc6040a5da6f6cb06b14e5ee2402df5196a218bba838f",
+    "XTERM-LICENSE": "b569f629d00f2626a8100df2a1798210535621e42164dfd426a6fe5aac7b0ccd"
+  }
+}

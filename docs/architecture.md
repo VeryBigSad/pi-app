@@ -1,7 +1,7 @@
 # Architecture
 
-Last updated: 2026-08-09
-Status: frozen plan for Pi Mobile 1.0
+Last updated: 2026-08-11
+Status: implemented as written; this remains the frozen system shape for Pi Mobile 1.0. Verification state lives in [requirements-traceability.md](requirements-traceability.md).
 
 Pi Mobile is a native Android control surface for Pi processes running on a paired Mac. Pi configuration, provider credentials, extension code, sessions, and `~/.groq_key` stay on the Mac. Version 1.0 includes both a native semantic client and a terminal compatibility client.
 

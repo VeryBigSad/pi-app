@@ -6,7 +6,7 @@ export default defineConfig({
       provider: "v8",
       reporter: ["text", "lcov"]
     },
-    include: ["protocol/**/*.test.ts", "mac/**/*.test.ts", "relay/**/*.test.ts"],
+    include: ["protocol/**/*.test.ts", "mac/**/*.test.ts", "scripts/**/*.test.mjs"],
     testTimeout: 10_000
   }
 });

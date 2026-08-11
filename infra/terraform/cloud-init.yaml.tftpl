@@ -1,0 +1,544 @@
+#cloud-config
+package_update: true
+ssh_pwauth: false
+disable_root: true
+packages:
+  - ["docker.io", "29.1.3-0ubuntu3~24.04.2"]
+  - ["docker-compose-v2", "2.40.3+ds1-0ubuntu1~24.04.1"]
+  - ["openssl", "3.0.13-0ubuntu3.12"]
+  - ["curl", "8.5.0-2ubuntu10.11"]
+users:
+  - default
+  - name: pimobile
+    lock_passwd: true
+    shell: /bin/bash
+    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+write_files:
+  - path: /etc/pimobile/hosts.env
+    permissions: "0644"
+    owner: root:root
+    content: |
+      RELAY_HOST=${relay_host}
+      PUSH_HOST=${push_host}
+  - path: /etc/pimobile/images.env
+    permissions: "0644"
+    owner: root:root
+    content: |
+      RELAY_IMAGE=${relay_image}
+      CADDY_IMAGE=${caddy_image}
+      NTFY_IMAGE=${ntfy_image}
+  - path: /etc/pimobile/cosign-policy
+    permissions: "0644"
+    owner: root:root
+    content: |
+      COSIGN_IMAGE=gcr.io/projectsigstore/cosign@sha256:de9c65609e6bde17e6b48de485ee788407c9502fa08b8f4459f595b21f56cd00
+      COSIGN_CERTIFICATE_IDENTITY=https://github.com/VeryBigSad/pi-app/.github/workflows/relay-image.yml@refs/heads/main
+      COSIGN_OIDC_ISSUER=https://token.actions.githubusercontent.com
+  - path: /opt/pimobile/compose.yaml
+    permissions: "0644"
+    owner: root:root
+    content: |
+      name: pi-mobile
+      services:
+        relay:
+          image: $${RELAY_IMAGE}
+          platform: linux/amd64
+          pull_policy: missing
+          user: "65532:65532"
+          restart: unless-stopped
+          read_only: true
+          command: ["-listen", "0.0.0.0:8080", "-registry", "/var/lib/pimobile/registry.db", "-bootstrap-token-file", "/run/secrets/bootstrap-token"]
+          volumes:
+            - /var/lib/pimobile/relay:/var/lib/pimobile
+            - /var/lib/pimobile/relay-secrets:/run/secrets
+          tmpfs:
+            - /tmp:size=16m,mode=1777
+          security_opt:
+            - no-new-privileges:true
+          cap_drop: [ALL]
+          deploy:
+            resources:
+              limits:
+                pids: 128
+                memory: 512M
+                cpus: "1.0"
+          healthcheck:
+            test: ["CMD", "/usr/local/bin/wget", "-q", "--spider", "http://127.0.0.1:8080/healthz"]
+            interval: 10s
+            timeout: 3s
+            retries: 12
+            start_period: 10s
+          logging:
+            driver: json-file
+            options:
+              max-size: "10m"
+              max-file: "3"
+        ntfy:
+          image: $${NTFY_IMAGE}
+          platform: linux/amd64
+          pull_policy: missing
+          user: "65533:65533"
+          restart: unless-stopped
+          read_only: true
+          command: ["serve"]
+          environment:
+            - HOME=/tmp
+          volumes:
+            - /etc/pimobile/ntfy.yml:/etc/ntfy/server.yml:ro
+            - /var/lib/pimobile/ntfy:/var/lib/ntfy
+          tmpfs:
+            - /tmp:size=16m,mode=1777
+          security_opt:
+            - no-new-privileges:true
+          cap_drop: [ALL]
+          deploy:
+            resources:
+              limits:
+                pids: 128
+                memory: 384M
+                cpus: "0.5"
+          healthcheck:
+            test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/v1/health"]
+            interval: 10s
+            timeout: 3s
+            retries: 12
+            start_period: 10s
+          logging:
+            driver: json-file
+            options:
+              max-size: "10m"
+              max-file: "3"
+        caddy:
+          image: $${CADDY_IMAGE}
+          platform: linux/amd64
+          pull_policy: missing
+          user: "65534:65534"
+          restart: unless-stopped
+          read_only: true
+          ports:
+            - "443:443/tcp"
+          volumes:
+            - /etc/pimobile/Caddyfile:/etc/caddy/Caddyfile:ro
+            - /var/lib/pimobile/caddy-data:/data
+            - /var/lib/pimobile/caddy-config:/config
+          tmpfs:
+            - /tmp:size=16m,mode=1777
+          security_opt:
+            - no-new-privileges:true
+          cap_drop: [ALL]
+          cap_add: [NET_BIND_SERVICE]
+          deploy:
+            resources:
+              limits:
+                pids: 128
+                memory: 256M
+                cpus: "0.5"
+          healthcheck:
+            test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:2019/config/"]
+            interval: 10s
+            timeout: 3s
+            retries: 12
+            start_period: 15s
+          logging:
+            driver: json-file
+            options:
+              max-size: "10m"
+              max-file: "3"
+  - path: /etc/pimobile/Caddyfile
+    permissions: "0644"
+    owner: root:root
+    content: |
+      {
+      	admin 127.0.0.1:2019
+      	auto_https disable_redirects
+      	servers {
+      		read_header 5s
+      		read 30s
+      		write 300s
+      		idle 120s
+      		max_header_size 32KB
+      	}
+      }
+      (public_tls) {
+      	tls {
+      		protocols tls1.3
+      		issuer acme {
+      			disable_http_challenge
+      		}
+      	}
+      	header Strict-Transport-Security "max-age=31536000"
+      }
+      ${relay_host} {
+      	import public_tls
+      	request_body {
+      		max_size 64KB
+      	}
+      	reverse_proxy relay:8080 {
+      		transport http {
+      			dial_timeout 5s
+      			response_header_timeout 15s
+      		}
+      	}
+      }
+      ${push_host} {
+      	import public_tls
+      	request_body {
+      		max_size 256KB
+      	}
+      	reverse_proxy ntfy:80 {
+      		transport http {
+      			dial_timeout 5s
+      			response_header_timeout 15s
+      		}
+      	}
+      }
+  - path: /etc/pimobile/ntfy.yml
+    permissions: "0644"
+    owner: root:root
+    content: |
+      base-url: https://${push_host}
+      listen-http: ":80"
+      behind-proxy: true
+      auth-file: /var/lib/ntfy/auth.db
+      auth-default-access: deny-all
+      cache-file: /var/lib/ntfy/cache.db
+      cache-duration: 12h
+      attachment-cache-dir: ""
+      enable-login: false
+      web-root: disable
+      message-size-limit: "4K"
+      global-topic-limit: 500
+      visitor-request-limit-burst: 60
+      visitor-request-limit-replenish: 3s
+      visitor-message-daily-limit: 10000
+      visitor-subscription-limit: 30
+      log-level: warn
+      log-format: json
+  - path: /usr/local/bin/pimobile-compose
+    permissions: "0755"
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      exec /usr/bin/docker compose --env-file /etc/pimobile/images.env -f /opt/pimobile/compose.yaml "$@"
+  - path: /usr/local/sbin/pimobile-first-boot
+    permissions: "0700"
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      relay_dir=/var/lib/pimobile/relay
+      secrets_dir=/var/lib/pimobile/relay-secrets
+      bootstrap_dir=/var/lib/pimobile/bootstrap
+      ntfy_dir=/var/lib/pimobile/ntfy
+      caddy_data=/var/lib/pimobile/caddy-data
+      caddy_config=/var/lib/pimobile/caddy-config
+      relay_server=$secrets_dir/bootstrap-token
+      relay_export=$bootstrap_dir/relay-token
+      ntfy_export=$bootstrap_dir/ntfy-password
+      marker=$bootstrap_dir/.credentials-initialized
+      auth_db=$ntfy_dir/auth.db
+      fail() {
+        printf 'pimobile-first-boot: %s\n' "$*" >&2
+        exit 1
+      }
+      check_dir() {
+        [ -d "$1" ] || fail "$1 missing"
+        [ "$(stat -c '%u:%g' "$1")" = "$2" ] || fail "$1 owner must be $2"
+        [ "$(stat -c '%a' "$1")" = "$3" ] || fail "$1 mode must be $3"
+      }
+      check_secret() {
+        [ -f "$1" ] || fail "$1 missing"
+        [ -s "$1" ] || fail "$1 empty"
+        [ "$(stat -c '%u:%g' "$1")" = "$2" ] || fail "$1 owner must be $2"
+        [ "$(stat -c '%a' "$1")" = "600" ] || fail "$1 mode must be 600"
+        grep -qxE '[0-9a-f]{64}' "$1" || fail "$1 content malformed"
+      }
+      check_layout() {
+        check_dir "$relay_dir" 65532:65532 700
+        check_dir "$secrets_dir" 65532:65532 700
+        check_dir "$bootstrap_dir" 0:0 700
+        check_dir "$ntfy_dir" 65533:65533 700
+        check_dir "$caddy_data" 65534:65534 750
+        check_dir "$caddy_config" 65534:65534 750
+      }
+      if [ -f "$marker" ]; then
+        check_layout
+        if [ -e "$relay_server" ]; then
+          check_secret "$relay_server" 65532:65532
+        fi
+        if [ -e "$relay_export" ] || [ -e "$ntfy_export" ]; then
+          check_secret "$relay_export" 0:0
+          check_secret "$ntfy_export" 0:0
+        fi
+        exit 0
+      fi
+      if [ -e "$auth_db" ]; then
+        fail "ntfy auth database exists without the completion marker; refusing to regenerate credentials"
+      fi
+      if [ ! -e "$relay_server" ] && { [ -e "$relay_export" ] || [ -e "$ntfy_export" ]; }; then
+        fail "relay token already consumed while export copies remain; refusing to regenerate credentials"
+      fi
+      install -d -m 0700 -o 65532 -g 65532 "$relay_dir" "$secrets_dir"
+      install -d -m 0700 -o root -g root "$bootstrap_dir"
+      install -d -m 0700 -o 65533 -g 65533 "$ntfy_dir"
+      install -d -m 0750 -o 65534 -g 65534 "$caddy_data" "$caddy_config"
+      umask 077
+      staging=$bootstrap_dir/.staging.$$
+      mkdir -m 0700 "$staging"
+      trap 'rm -rf "$staging"' EXIT
+      relay_token=$(openssl rand -hex 32)
+      ntfy_password=$(openssl rand -hex 32)
+      printf '%s\n' "$relay_token" > "$staging/bootstrap-token"
+      printf '%s\n' "$relay_token" > "$staging/relay-token"
+      printf '%s\n' "$ntfy_password" > "$staging/ntfy-password"
+      unset relay_token ntfy_password
+      chmod 0600 "$staging/bootstrap-token" "$staging/relay-token" "$staging/ntfy-password"
+      chown 65532:65532 "$staging/bootstrap-token"
+      mv -f "$staging/bootstrap-token" "$relay_server"
+      mv -f "$staging/relay-token" "$relay_export"
+      mv -f "$staging/ntfy-password" "$ntfy_export"
+      rm -rf "$staging"
+      trap - EXIT
+      check_layout
+      check_secret "$relay_server" 65532:65532
+      check_secret "$relay_export" 0:0
+      check_secret "$ntfy_export" 0:0
+      : > "$marker"
+      chmod 0600 "$marker"
+  - path: /usr/local/sbin/pimobile-init-ntfy
+    permissions: "0700"
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      compose() {
+        /usr/local/bin/pimobile-compose "$@"
+      }
+      configure_access() {
+        compose exec -T ntfy ntfy access --reset everyone >/dev/null
+        compose exec -T ntfy ntfy access --reset pimobile >/dev/null
+        compose exec -T ntfy ntfy access pimobile 'up*' rw >/dev/null
+      }
+      password_file=/var/lib/pimobile/bootstrap/ntfy-password
+      for attempt in $(seq 1 60); do
+        users=$(compose exec -T ntfy ntfy user list 2>/dev/null || true)
+        if printf '%s\n' "$users" | grep -Fq 'user pimobile (role: user'; then
+          configure_access
+          exit 0
+        fi
+        if printf '%s\n' "$users" | grep -Fq 'user pimobile ('; then
+          printf 'pimobile ntfy user has an unexpected role\n' >&2
+          exit 1
+        fi
+        if [ ! -s "$password_file" ]; then
+          printf 'ntfy bootstrap credential unavailable\n' >&2
+          exit 1
+        fi
+        password=$(tr -d '\n' < "$password_file")
+        if NTFY_PASSWORD="$password" compose exec -T -e NTFY_PASSWORD ntfy ntfy user add --role=user pimobile >/dev/null 2>&1; then
+          unset password
+          configure_access
+          exit 0
+        fi
+        unset password
+        sleep 2
+      done
+      printf 'ntfy did not become ready\n' >&2
+      exit 1
+  - path: /usr/local/sbin/pimobile-await-healthy
+    permissions: "0700"
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      . /etc/pimobile/hosts.env
+      deadline=$((SECONDS + 240))
+      while [ "$SECONDS" -lt "$deadline" ]; do
+        all_healthy=true
+        for service in relay ntfy caddy; do
+          container=$(/usr/local/bin/pimobile-compose ps -q "$service" 2>/dev/null || true)
+          if [ -z "$container" ]; then
+            all_healthy=false
+            break
+          fi
+          status=$(/usr/bin/docker inspect -f '{{.State.Status}}' "$container")
+          restarts=$(/usr/bin/docker inspect -f '{{.RestartCount}}' "$container")
+          if [ "$status" = "restarting" ] || [ "$restarts" -ge 5 ]; then
+            printf 'pimobile-await-healthy: %s is crash-looping (status=%s restarts=%s)\n' "$service" "$status" "$restarts" >&2
+            exit 1
+          fi
+          health=$(/usr/bin/docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container")
+          if [ "$status" != "running" ] || [ "$health" != "healthy" ]; then
+            all_healthy=false
+            break
+          fi
+        done
+        if [ "$all_healthy" = true ] \
+          && curl --fail --silent --show-error --max-time 10 --resolve "$RELAY_HOST:443:127.0.0.1" "https://$RELAY_HOST/healthz" >/dev/null \
+          && curl --fail --silent --show-error --max-time 10 --resolve "$PUSH_HOST:443:127.0.0.1" "https://$PUSH_HOST/v1/health" >/dev/null; then
+          printf 'pimobile-await-healthy: relay, ntfy, and Caddy are healthy with valid ACME certificates\n'
+          exit 0
+        fi
+        sleep 3
+      done
+      printf 'pimobile-await-healthy: services did not become healthy in time\n' >&2
+      exit 1
+  - path: /usr/local/sbin/pimobile-update
+    permissions: "0700"
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      env_file=/etc/pimobile/images.env
+      next_file=$env_file.next
+      previous_file=$env_file.previous
+      policy_file=/etc/pimobile/cosign-policy
+      fail() {
+        printf 'pimobile-update: %s\n' "$*" >&2
+        exit 1
+      }
+      validate_ref() {
+        case "$2" in
+          ghcr.io/*@sha256:* | docker.io/*@sha256:*) : ;;
+          *) fail "$1 must be a ghcr.io or docker.io digest reference" ;;
+        esac
+        digest=$${2##*@sha256:}
+        [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || fail "$1 digest malformed"
+      }
+      apply_and_verify() {
+        /usr/local/bin/pimobile-compose pull
+        /usr/local/bin/pimobile-compose up --detach --remove-orphans
+        /usr/local/sbin/pimobile-await-healthy
+      }
+      rollback() {
+        [ -f "$previous_file" ] || fail "no previous image set recorded"
+        cp "$previous_file" "$env_file"
+        apply_and_verify || fail "rollback did not restore a healthy deployment"
+        printf 'pimobile-update: rolled back to the previous image set\n'
+      }
+      if [ "$${1:-}" = "rollback" ]; then
+        rollback
+        exit 0
+      fi
+      [ -f "$next_file" ] || fail "$next_file missing; stage updates with: pimobile-update stage RELAY_IMAGE=<ref> [CADDY_IMAGE=<ref>] [NTFY_IMAGE=<ref>]"
+      if [ "$${1:-}" = "stage" ]; then
+        shift
+        [ "$#" -ge 1 ] || fail "stage requires at least one KEY=VALUE update"
+        staged=$(mktemp)
+        trap 'rm -f "$staged"' EXIT
+        for pair in "$@"; do
+          key=$${pair%%=*}
+          value=$${pair#*=}
+          case "$key" in
+            RELAY_IMAGE | CADDY_IMAGE | NTFY_IMAGE) validate_ref "$key" "$value" ;;
+            *) fail "unknown image key $key" ;;
+          esac
+          printf '%s=%s\n' "$key" "$value" >> "$staged"
+        done
+        install -m 0644 -o root -g root "$staged" "$next_file"
+        rm -f "$staged"
+        trap - EXIT
+        printf 'staged %s; apply with: systemctl start pi-mobile-update.service\n' "$next_file"
+        exit 0
+      fi
+      . "$env_file"
+      relay_current=$RELAY_IMAGE
+      caddy_current=$CADDY_IMAGE
+      ntfy_current=$NTFY_IMAGE
+      . "$next_file"
+      validate_ref RELAY_IMAGE "$RELAY_IMAGE"
+      validate_ref CADDY_IMAGE "$CADDY_IMAGE"
+      validate_ref NTFY_IMAGE "$NTFY_IMAGE"
+      if [ "$RELAY_IMAGE" = "$relay_current" ] && [ "$CADDY_IMAGE" = "$caddy_current" ] && [ "$NTFY_IMAGE" = "$ntfy_current" ]; then
+        rm -f "$next_file"
+        printf 'pimobile-update: image set unchanged\n'
+        exit 0
+      fi
+      if [ "$RELAY_IMAGE" != "$relay_current" ]; then
+        . "$policy_file"
+        /usr/bin/docker run --rm "$COSIGN_IMAGE" verify \
+          --certificate-identity "$COSIGN_CERTIFICATE_IDENTITY" \
+          --certificate-oidc-issuer "$COSIGN_OIDC_ISSUER" \
+          "$RELAY_IMAGE" >/dev/null || fail "cosign verification failed for $RELAY_IMAGE"
+      fi
+      cp "$env_file" "$previous_file"
+      replacement=$(mktemp)
+      trap 'rm -f "$replacement"' EXIT
+      printf 'RELAY_IMAGE=%s\nCADDY_IMAGE=%s\nNTFY_IMAGE=%s\n' "$RELAY_IMAGE" "$CADDY_IMAGE" "$NTFY_IMAGE" > "$replacement"
+      install -m 0644 -o root -g root "$replacement" "$env_file"
+      rm -f "$replacement" "$next_file"
+      trap - EXIT
+      if ! apply_and_verify; then
+        printf 'pimobile-update: update unhealthy, rolling back\n' >&2
+        rollback || true
+        exit 1
+      fi
+      printf 'pimobile-update: update applied and healthy\n'
+  - path: /usr/local/bin/pimobile-bootstrap-read
+    permissions: "0750"
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      exec 9>/run/lock/pimobile-bootstrap.lock
+      if ! flock -n 9; then
+        printf 'bootstrap credential retrieval already in progress\n' >&2
+        exit 1
+      fi
+      relay=/var/lib/pimobile/bootstrap/relay-token
+      ntfy=/var/lib/pimobile/bootstrap/ntfy-password
+      if [ ! -s "$relay" ] || [ ! -s "$ntfy" ]; then
+        printf 'bootstrap credentials already retrieved or unavailable\n' >&2
+        exit 1
+      fi
+      relay_value=$(tr -d '\n' < "$relay")
+      ntfy_value=$(tr -d '\n' < "$ntfy")
+      printf '{"relayBootstrap":"%s","ntfyUser":"pimobile","ntfyPassword":"%s"}\n' "$relay_value" "$ntfy_value"
+      unset relay_value ntfy_value
+      shred -u -- "$relay" "$ntfy"
+  - path: /etc/systemd/system/pi-mobile.service
+    permissions: "0644"
+    owner: root:root
+    content: |
+      [Unit]
+      Description=Pi Mobile relay and push
+      Requires=docker.service
+      After=docker.service network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      WorkingDirectory=/opt/pimobile
+      ExecStartPre=/usr/local/sbin/pimobile-first-boot
+      ExecStartPre=/usr/local/bin/pimobile-compose config --quiet
+      ExecStart=/usr/local/bin/pimobile-compose up --detach --remove-orphans
+      ExecStartPost=/usr/local/sbin/pimobile-init-ntfy
+      ExecStartPost=/usr/local/sbin/pimobile-await-healthy
+      ExecReload=/usr/local/bin/pimobile-compose up --detach --remove-orphans
+      ExecReload=/usr/local/sbin/pimobile-await-healthy
+      ExecStop=/usr/local/bin/pimobile-compose down --timeout 30
+      TimeoutStartSec=420
+      TimeoutStopSec=60
+
+      [Install]
+      WantedBy=multi-user.target
+  - path: /etc/systemd/system/pi-mobile-update.service
+    permissions: "0644"
+    owner: root:root
+    content: |
+      [Unit]
+      Description=Pi Mobile signed in-place image update
+      Requires=docker.service
+      After=docker.service network-online.target pi-mobile.service
+      Wants=network-online.target
+      ConditionPathExists=/etc/pimobile/images.env.next
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/pimobile-update
+      TimeoutStartSec=600
+runcmd:
+  - [systemctl, daemon-reload]
+  - [systemctl, enable, --now, pi-mobile.service]

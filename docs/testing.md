@@ -1,33 +1,116 @@
 # Testing strategy
 
-Last updated: 2026-08-09
+Last updated: 2026-08-11
 
 Rule that shapes everything below: **tests assert semantics, not shape.** A test that checks a field exists is not a test. Fault paths are as mandatory as happy paths, because every interesting failure here is a fault path: a dropped socket, a crash between journal states, a coalesced update, a denied approval, a chunk that returned out of order, a tmux pane that mangled a key release.
 
-Fixtures are sanitized, checked in, and never produced by mutating `~/.pi`.
+Fixtures are sanitized, checked in (`protocol/fixtures/`), and never produced by mutating `~/.pi`.
+
+## Current suites and how to run them
+
+### Node / TypeScript (mac host, protocol, approval, scripts)
+
+```bash
+npm ci
+npm run check     # eslint . && tsc -b && vitest run
+npm test          # vitest run only (372 tests, 45 files, green 2026-08-11)
+npm run terminal:verify   # rebuild xterm bundle and assert committed assets are unchanged
+npm run fixtures:verify   # cross-check golden protocol fixtures
+npm run dal:verify        # live DAL check (200/JSON/no-redirect/both relations)
+npm run identity:verify   # release-signing identity derivation check
+```
+
+Vitest covers `protocol/**`, `mac/**`, `scripts/**` (see `vitest.config.ts`). Suites of note: `mac/host/test/journal.test.ts` (crash matrix), `pi-core.test.ts` (framing/delta/raw), `canonical-snapshot.test.ts`, `security-*.test.ts`, `relay-*.test.ts`, `terminal-*.test.ts`, `voice*.test.ts`; `protocol/ts/test/{pimb,conformance,fuzz}.test.ts`; `mac/approval/test/broker.test.ts`; `mac/pi-patch/test/{patch,runtime}.test.ts`.
+
+Smoke helpers against real Pi: `npm run pi:smoke`, `npm run pi:smoke:daemon`.
+
+### Android / Gradle
+
+JDK 21 is mandatory; the build enforces it (`require(JavaVersion.current().isCompatibleWith(JavaVersion.VERSION_21))` in the root build). Temurin 21 is at `/Library/Java/JavaVirtualMachines/temurin-21.jdk`; JDK 25 is installed but is not the build JDK.
+
+```bash
+export JAVA_HOME=$(/usr/libexec/java_home -v 21)
+./gradlew verifyEnvironment testDebugUnitTest lintDebug assembleDebug assembleRelease
+```
+
+Gradle runs with 9 workers (`org.gradle.workers.max=9` in `gradle.properties`) plus parallel/configuration-cache. Last recorded run: 545 unit test executions (311 debug + 234 release variant), 0 failures.
+
+Scope to one module when iterating (do not run the aggregate for a focused change):
+
+```bash
+./gradlew :android:core:push:testDebugUnitTest
+./gradlew :android:feature:session:lintDebug
+```
+
+### Android instrumentation (emulator)
+
+Recorded green run: 113 connected tests, 0 failures, on AVD `PiApp_API_29` (Google APIs, WebView 91.0.4472.114) at serial `emulator-5590`. Modules covered: app launch + terminal canary, core security/network/storage/push/voice/update, feature session/agents/settings, terminal runtime.
+
+Always target the serial explicitly; never use unqualified `adb` when more than one device may exist:
+
+```bash
+adb devices -l
+adb -s emulator-5590 emu avd name   # confirm it is PiApp_API_29
+ANDROID_SERIAL=emulator-5590 ./gradlew connectedDebugAndroidTest
+# or scoped:
+ANDROID_SERIAL=emulator-5590 ./gradlew :android:core:update:connectedDebugAndroidTest
+```
+
+API 34/36 and no-Google AOSP lanes are installed (`PiApp_API_36`, `domonap`, `PiApp_API_34_AOSP_UI`, `PiApp_API_34_AOSP`) but have **no recorded green run yet**; do not cite them as evidence. API 28 is a negative-only lane.
+
+### Go relay
+
+```bash
+cd relay && go test ./...
+```
+
+All six packages green (`cmd/relay`, `internal/auth`, `bootstrap`, `httpapi`, `pairing`, `registry`, `rendezvous`).
+
+### Infrastructure
+
+```bash
+terraform -chdir=infra/terraform fmt -check -recursive
+terraform -chdir=infra/terraform init -backend=false
+terraform -chdir=infra/terraform validate
+infra/local/check-orphans.sh            # after any destroy experiment
+infra/local/smoke-ntfy-auth.sh          # local ntfy ACL smoke
+infra/local/verify-relay-image.sh       # cosign policy verification of relay image
+```
+
+No `terraform apply` has been run; there is no cloud evidence.
+
+### CI coverage (`.github/workflows/`)
+
+| Workflow | Contents |
+|---|---|
+| `ci.yml` | `node`: `npm ci`, `npm run check`, terminal verify, fixtures verify, DAL verify, `npm audit --audit-level=high`. `android`: JDK 21, unit tests, lint, assemble debug+release. `android-api29`: emulator-runner API 29 connectedDebugAndroidTest across app + all core + terminal + feature/session. `terraform`: fmt/init/validate. `go`: relay tests. |
+| `dal.yml` | scheduled live DAL verification. |
+| `relay-image.yml` | relay image build/verify/publish with cosign keyless signature (identity pinned in cloud-init cosign policy). |
+| `secret-scan.yml` | gitleaks. |
+| `android-release.yml` | manual `workflow_dispatch`: build/verify signed APK, mirror to `VeryBigSad/pi-app-releases`, regenerate `update-v1.json`, commit to Pages repo. |
 
 ## Layers
 
-| Layer | Runs on | Scope | Gate |
+| Layer | Runs on | Scope | Status |
 |---|---|---|---|
-| Contract and fuzz | CI, both languages | Identical golden fixtures for the framed protocol; allocation bounds | Every commit |
-| Pi framing and assembly | CI | LF scanner, oversized records, exact delta assembly | Every commit |
-| Unit | CI | Framing/reducers/journal/VAD/merge/redaction, P-256 route challenges/one-use notices | Every commit |
-| Integration | CI and local | Mac host against a real `pi --mode rpc` process | Every commit |
-| Journal crash matrix | CI | Kill at every transition and stdin boundary | Every commit |
-| Android instrumentation | Emulator | Compose behavior, navigation, accessibility semantics | Every commit |
-| Transport and auth | CI and emulator | Direct TLS, TLS over WSS, certificate lifecycle, WebAuthn verifier | Pre-merge |
-| E2E | Emulator plus local host and relay | Phone-to-Mac scenarios over the real transport | Pre-merge |
-| Fault injection | CI and emulator | Disconnects, gaps, epochs, crashes, malformed frames, clock skew | Pre-merge |
-| Terminal | Emulator plus real PTY | Rendering, keys, resize, reconnect, isolation | Pre-merge |
-| Security | CI | Replay, revocation, redaction, DAL, opacity, dependency scan | Pre-merge |
-| Supply chain | CI | Locks, checksums, SBOM, SCA, licenses, secret scan, signed package smoke | Pre-release |
-| Performance | Physical device; emulator indicative only | Release-build Macrobenchmark against the budgets below | Pre-release |
-| Manual | Emulator and physical device | The matrices below, with sanitized artifacts | Pre-release |
+| Contract and fuzz | CI, both languages | Identical golden fixtures for the framed protocol; allocation bounds | **exists** — `protocol/ts/test/*`, `android/core/protocol/src/test/*` against `protocol/fixtures/pimb-v1.json` |
+| Pi framing and assembly | CI | LF scanner, oversized records, exact delta assembly | **exists** — `mac/host/test/pi-core.test.ts` |
+| Unit | CI | Framing/reducers/journal/VAD/merge/redaction, P-256 route challenges/one-use notices | **exists** — 372 vitest + 545 JVM tests green |
+| Integration | CI and local | Mac host against a real `pi --mode rpc` process | **exists** — `rpc-process.test.ts`, `runtime-supervisor.test.ts`, `pi:smoke` helpers |
+| Journal crash matrix | CI | Kill at every transition and stdin boundary | **exists** — `mac/host/test/journal.test.ts` |
+| Android instrumentation | Emulator | Compose behavior, navigation, accessibility semantics | **exists, API 29 only** — 113 green on `emulator-5590` |
+| Transport and auth | CI and emulator | Direct TLS, TLS over WSS, certificate lifecycle, WebAuthn verifier | **exists** — unit + partial instrumentation |
+| E2E | Emulator plus local host and relay | Phone-to-Mac scenarios over the real transport | **partial** — smoke daemons exist; full E2E not wired into CI |
+| Fault injection | CI and emulator | Disconnects, gaps, epochs, crashes, malformed frames, clock skew | **partial** — covered within unit suites, no dedicated harness |
+| Terminal | Emulator plus real PTY | Rendering, keys, resize, reconnect, isolation | **exists, API 29 only** — canary + runtime instrumentation |
+| Security | CI | Replay, revocation, redaction, DAL, opacity, dependency scan | **exists** — security suites + `dal.yml` + `secret-scan.yml` |
+| Supply chain | CI | Locks, checksums, SBOM, SCA, licenses, secret scan, signed package smoke | **partial** — audit/secret-scan/identity scripts exist; SBOM/licenses job missing |
+| Performance | Physical device; emulator indicative only | Release-build Macrobenchmark against the budgets below | **missing** — no Macrobenchmark suite in tree |
+| Manual | Emulator and physical device | The matrices below, with sanitized artifacts | **pending** — physical device unavailable |
 
 ## Contract corpus
 
-Kotlin and TypeScript codecs must consume **identical** checked-in fixtures. A fixture only one side can parse fails CI.
+Kotlin and TypeScript codecs consume **identical** checked-in fixtures (`protocol/fixtures/pimb-v1.json`). A fixture only one side can parse fails CI (`conformance.test.ts` / `ConformanceFixtureTest.kt`).
 
 Mandatory cases:
 
@@ -39,7 +122,7 @@ Mandatory cases:
 6. Eight-lowercase-hex/null leaf IDs; UUID rejection. Active gaps wait idle. Canonical capture stores final append-order `lastAppendId` independently from branch leaf, validates `since: lastAppendId`, tags adjuncts, retries on append/leaf change, and replays post-fence. A fixture whose active leaf moved backward behind later off-branch appends must publish without livelock.
 7. Dormant recovered `RECEIVED`, current READY same-id/hash resubmit with full revalidation, non-dispatching `command.query`, and all command states.
 8. Prompt-image flow plus exact 8/64/256 MiB and 32-upload quotas; 15-minute orphan, 24-hour dormant, one-hour terminal cleanup; startup sweep never deletes a live row.
-9. Separate registration/assertion messages, `PAIRING_PROVISIONAL`, TLS-exporter+invitation+CSR-hash binding, and no mTLS claim before certificate.
+9. Separate registration/assertion messages, `PAIRING_PROVISIONAL`, TLS-exporter+invitation+CSR-hash binding (exporter label `EXPORTER-Pi-Mobile-Pairing-v1`), and no mTLS claim before certificate.
 10. Approval offer/decision/expired exact binding; terminal history bounds/generation/truncation.
 11. Canonical RFC 8785 hashing: reorder invariant; absent fields excluded; image refs and expected eight-hex leaf included.
 12. Fuzzers prove bounded allocation on hostile input.
@@ -56,7 +139,7 @@ Mandatory cases:
 
 ## Journal crash matrix
 
-The journal is the reason a mobile client can be trusted with mutations, so it gets its own matrix.
+Implemented in `mac/host/test/journal.test.ts`.
 
 - Kill before `RECEIVED`, after `RECEIVED`, before `ARMED`, after `ARMED` but before the first stdin byte, mid-write, and after the write but before `ACKED`.
 - Recovered `RECEIVED` remains dormant across time/restart and `command.query`; neither dispatches. Only same-id/hash resubmission on a current READY, user-authenticated connection may proceed after auth, lease, leaf, blobs, classification, and approval are revalidated.
@@ -67,80 +150,38 @@ The journal is the reason a mobile client can be trusted with mutations, so it g
 - Journal integrity failure or lock loss rejects all mutations rather than proceeding.
 - Read-only queries bypass the journal only when enumerated in the frozen schema.
 
-## Integration against real Pi
-
-- Environment fidelity: the hosted process reports the same manifest as a terminal run, including all 8 packages and all 5 local extensions, with integrity hashes.
-- Happy path, dialogs by id including a timeout auto-resolution, abort mid-stream, abort during retry.
-- Approval: patch integrity/source drift; tool hook runs after handler mutation and resolved `executeBash` in root/nested/`extensions:false`; direct RPC/interactive/programmatic normal bash each produce one offer; one global active offer/FIFO eight; ninth-request overflow, 30-second queue timeout, 120-second decision expiry, and 150-second total cap all block/resume; offer/decision/expired binding; sentinel absent before Allow and after Deny/disconnect.
-- Extension limits: a fixture performs direct Node `fs` side effects and proves they are **not** sandboxed. Known `/mcp`, `/usage`, `/agents`, `/btw`, `/llama` paths pre-route; unexpected command watchdog kills/restarts/resyncs and never claims custom-event detection.
-- Reconnect: mid-stream byte identity; active-gap unavailable; idle fence; append/leaf retries; post-fence replay. Replay 10,000/64 MiB/session, 256 MiB global, 24-hour edges reset rather than truncate.
-- Fork/backward branch fixture returns later off-branch append entries but an older active `leafId`; validation uses final `lastAppendId`, returns empty with unchanged leaf, publishes once, and never loops. A concurrent append or branch move retries the whole attempt.
-- `reload_runtime` from the local `self-reload.ts` extension interrupts the transport; the client must recover rather than wedge.
-- Writer-lease conflict: a second writer on one session faults visibly.
-
 ## Emulator matrix
 
 Present today: Google APIs arm64 images/AVDs for 28/29/34/36, no-Google `android-34;default;arm64-v8a` as `PiApp_API_34_AOSP_UI`, and headless `android-34;aosp_atd;arm64-v8a` as `PiApp_API_34_AOSP`; emulator `37.1.11.0`, platform-tools `37.0.1`, SDK `/opt/homebrew/share/android-commandlinetools`. `PiApp_API_29` is the floor. API 28 remains unsupported negative-only.
 
-| Configuration | Purpose | Note |
+| Configuration | Purpose | Evidence state |
 |---|---|---|
-| API 36 `PiApp_API_36` | Primary instrumentation/E2E | Present, `google_apis` |
-| API 34 `domonap` | Permission/FGS behavior | Present, `google_apis`; explicit serial |
-| API 29 `PiApp_API_29` | Supported `minSdk` floor, TLS 1.3, terminal engine floor | Present, `google_apis`, WebView 91.0.4472.114; full floor lane plus independent Linux managed device |
-| API 28 `PiApp_API_28` | Unsupported negative | Present; assert install incompatibility/exclusion, never product coverage |
-| API 34 `PiApp_API_34_AOSP_UI` | No-Google UI/notification path | Present, `default;arm64-v8a`; no credential provider bundled, so use debug-only fake auth |
-| API 34 `PiApp_API_34_AOSP` | Headless no-Google transport path | Present, `aosp_atd;arm64-v8a`; no IME/Settings/provider, so never assign composer, permission-UI, battery-settings, or production auth scenarios |
+| API 29 `PiApp_API_29` | Supported `minSdk` floor, TLS 1.3, terminal engine floor | **green** — 113 instrumentation tests, `emulator-5590` |
+| API 36 `PiApp_API_36` | Primary instrumentation/E2E | installed, no recorded run |
+| API 34 `domonap` | Permission/FGS behavior | installed, no recorded run |
+| API 28 `PiApp_API_28` | Unsupported negative | installed; negative-only |
+| API 34 `PiApp_API_34_AOSP_UI` | No-Google UI/notification path | installed, no recorded run; debug-only fake auth |
+| API 34 `PiApp_API_34_AOSP` | Headless no-Google transport path | installed, no recorded run; no IME/Settings/provider |
 | Resizable/foldable, tablet | Responsive layout | AVD substitute; no real hinge/OEM evidence |
 
-Before any terminal feature test, each API 29/34/36 lane reports the WebView package/version and runs the local xterm canary. API 29 must prove the `structuredClone` shim, `WeakRef`, canvas/font path, Unicode width, write/render, resize, and input. A fixture below WebView 91 or missing a capability must show update-required and make no terminal/network load. The xterm asset builds twice with identical hash.
+Before any terminal feature test, each lane reports the WebView package/version and runs the local xterm canary (shim, `WeakRef`, canvas/font, Unicode width, write/render, resize, input). Below WebView 91 or missing capability: update-required state, no terminal/network load. The xterm asset builds twice with identical hash (`npm run terminal:verify`).
 
 Emulator limits, stated rather than glossed: graphics timing is not representative so performance numbers are indicative only; key attestation differs from hardware; the Bitwarden provider ceremony is not credibly reproducible; OEM battery policy does not exist.
-
-```bash
-emulator -avd PiApp_API_36
-adb devices -l
-# Identify mapping; do not guess emulator-5554:
-adb -s <serial> emu avd name
-SERIAL=<serial-that-reports-PiApp_API_36>
-adb -s "$SERIAL" wait-for-device
-ANDROID_SERIAL="$SERIAL" ./gradlew connectedDebugAndroidTest
-adb -s "$SERIAL" logcat -d > artifacts/api36-logcat.txt
-```
 
 Every `adb` invocation uses `-s` when another emulator/device may exist. Each AVD scenario records serial-to-AVD mapping. Unqualified `adb wait-for-device`, screenshots, logcat, install, and input commands are prohibited in parallel runs.
 
 ## Manual matrix
 
-Every row produces a sanitized artifact attached to the change. The integration owner must personally use the app; automated UI tests do not replace that.
+Unchanged from the original plan and still mostly pending; every row produces a sanitized artifact. The integration owner must personally use the app; automated UI tests do not replace that. The emulator rows now have partial automated backing (see Layers); the physical-device rows have none.
 
-### Emulator, supported API 29 floor and API 34/36
-
-| Scenario | Pass condition |
-|---|---|
-| API 29 install, TLS 1.3, startup, storage, network, process death | No unsupported-API failure; Linux CI confirms floor |
-| API 28 negative | Package declared unsupported or install rejected; never counted as floor pass |
-| `PiApp_API_34_AOSP_UI` no-Google | UI, notification permission, UnifiedPush connector/fake distributor, provider-absent guidance work with debug-only fake auth; production passkey is not claimed |
-| `PiApp_API_34_AOSP` headless ATD | Core TLS/transport, connector receiver, and fake-distributor delivery work; no IME/Settings UI is assigned |
-| Fake first-owner/later-device pairing | CSR/route keys precede provisional TLS; registration vs assertion; exporter binding/local confirm; cert then mTLS; revocable |
-| Passkey with Google Password Manager | Ceremony completes; DAL validates |
-| Phone, tablet, foldable layouts; light and dark; rotation; process death | Layout correct; scroll position and drafts preserved |
-| Semantic stream, steer, follow-up, abort, dialog, diff, image, raw inspector | Correct semantics; exactly one settlement |
-| Approval deny/allow/broker unavailable | Sentinel absent on deny or broker loss; Pi turn resumes with blocked result; present once after allow |
-| Dormant/indeterminate commands after host crashes | RECEIVED waits explicit current resubmit/revalidation; ARMED is unknown outcome; query never executes |
-| Terminal engine/keys, resize, reconnect, history, renderer kill | Local bundle canary passes; connected 5k lines; fresh visible-pane redraw; separate bounded history; no input replay/full-history/CDN claim |
-| Airplane mode, relay restart, host restart | Reconnect and resync with no duplication or truncation |
-| Certificate revocation | Explicit revoked state; no readable plaintext remains |
-| No distributor installed | Clear explanation and in-app catch-up |
-| TalkBack order, polite streaming, 200% font, 48 dp targets, contrast | All pass |
-
-### Physical release-signed Android 14+ device
+### Physical release-signed Android 14+ device (all pending — no device)
 
 | Scenario | Pass condition |
 |---|---|
 | Bitwarden passkey creation and assertion, plus DAL | Ceremony completes with the third-party provider |
 | Hardware-backed key and invalidation inspection | Behavior recorded without unsupported claims |
 | Direct LAN and relayed remote paths | Both work; path is visible in the UI |
-| Android 14+ Bitwarden plus self-hosted ntfy with Google disabled/absent | Production passkey assertion and wake both work; proves full no-Google configuration |
+| Android 14+ Bitwarden plus self-hosted ntfy with Google disabled/absent | Production passkey assertion and wake both work |
 | Doze and background completion and approval wakes; OEM battery behavior | Wake on next window; no duplicate; documented latency |
 | Real microphone dictation through Groq | Ordered editable transcript, seams merged, never auto-sent |
 | Gboard plus Bluetooth keyboard press, repeat, release in terminal mode | Exact key semantics including release |
@@ -149,7 +190,7 @@ Every row produces a sanitized artifact attached to the change. The integration 
 
 ## Voice quota and economics
 
-Fake-clock tests cover exact encoded duration including overlap and reserve before network send:
+Implemented in `mac/host/src/voice/rate-ledger.ts` with fake-clock tests in `mac/host/test/voice.test.ts`:
 
 - billed seconds for 0.01/8/10/12.5-second uploads are 10/10/10/12.5; every retry adds another attempt/duration reservation;
 - cost is `billedSeconds / 3600 × $0.04`, including `$0.04` for 3,600 billed seconds and `$0.05` for 4,500;
@@ -161,7 +202,7 @@ Fake-clock tests cover exact encoded duration including overlap and reserve befo
 
 ## Performance budgets
 
-Release build with R8 and a Baseline Profile, Macrobenchmark, Pixel 7-class or newer physical 60 Hz device. These are assertions. Emulator figures are recorded separately and never used to claim a budget is met. Threshold changes need benchmark evidence and an ADR, not a test-only relaxation.
+Release build with R8 and a Baseline Profile, Macrobenchmark, Pixel 7-class or newer physical 60 Hz device. These are assertions. Emulator figures are recorded separately and never used to claim a budget is met. Threshold changes need benchmark evidence and an ADR, not a test-only relaxation. **No Macrobenchmark suite exists yet (not-implemented).**
 
 | Metric | Budget |
 |---|---:|
@@ -207,6 +248,8 @@ Release build with R8 and a Baseline Profile, Macrobenchmark, Pixel 7-class or n
 
 ## Security tests
 
+Existing coverage is named in [requirements-traceability.md](requirements-traceability.md). The matrix below remains the target:
+
 - Replay/reorder rejection; P-256 route challenge cold reconnect, one-use notice, rotation overlap/revoke; passkey/device-cert independent revocation.
 - Pairing matrix: QR-pinned server-auth only, mTLS forbidden before cert, CSR generated first, exporter/invitation/CSR-hash binding, first-owner registration versus later assertion, local confirm.
 - Certificate matrix: invalid/missing/expired/revoked and live close.
@@ -220,9 +263,8 @@ Release build with R8 and a Baseline Profile, Macrobenchmark, Pixel 7-class or n
 - Prompt-image ownership/digest/orphan cleanup and no leaked temp files.
 - Terminal bundle npm integrity/packed SHA/built hash, deterministic double build, Chromium-91 syntax target, source-locked clone shim, API 29/34/36 canary, too-old engine refusal, WebView isolation, and connected/history separation.
 - Relay persistence/log inspection contains only route public keys/revocation and no payload, bearer secret, topic, or query string.
+- Updater: metadata fail-closed parse, monotonic `versionCode`, signature pin, downgrade/replay rejection (`android/core/update/src/test/**`).
 
 ## CI
 
-Every commit runs contract and fuzz, Pi framing and assembly, unit, integration, journal crash matrix, Android instrumentation, and security. Pre-merge adds transport and auth, E2E, fault injection, and terminal. Pre-release adds supply chain, performance, and the manual matrices. Cross-language fixture parity is a hard gate.
-
-The Gradle wrapper with checksum is mandatory since no system Gradle is installed. JDK 21 is the build JDK; JDK 25 is present locally but never assumed. Build-tools are fixed at 36.0.0. xterm/node-pty use full npm integrity and packed hashes; xterm's generated JS/CSS hash must be reproducible.
+Current workflows are enumerated at the top of this document. Every commit runs node (lint/typecheck/tests/fixtures/DAL/audit), android (unit/lint/assemble ×2), android-api29 (instrumentation), terraform (fmt/validate), and go (relay). Pre-release still lacks: supply-chain SBOM/licenses job, Macrobenchmark/performance, and the manual matrices. Cross-language fixture parity is a hard gate and exists.
