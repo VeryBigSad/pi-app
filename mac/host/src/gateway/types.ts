@@ -231,6 +231,12 @@ export interface UnknownMessageSink {
   retain(message: Envelope): Promise<void>;
 }
 
+/** Handles device-registered UnifiedPush endpoints (push.endpoint / push.endpoint.revoke). */
+export interface PushEndpointRuntime {
+  register(deviceId: string, body: JsonObject): Promise<void>;
+  revoke(deviceId: string, body: JsonObject): Promise<void>;
+}
+
 export interface HostGatewayOptions {
   readonly hostVersion: string;
   readonly piVersion: string;
@@ -245,6 +251,7 @@ export interface HostGatewayOptions {
   readonly blobs: BlobRuntime;
   readonly terminal: TerminalRuntime;
   readonly voice?: VoiceRuntime;
+  readonly pushEndpoints?: PushEndpointRuntime;
   readonly passkeySessionTtlMs?: number;
   readonly unknownMessages?: UnknownMessageSink;
   readonly outboundQueueFrames?: number;

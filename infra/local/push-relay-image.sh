@@ -37,18 +37,24 @@ image="cr.yandex/$registry_id/relay"
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 export DOCKER_CONFIG=$scratch
-
-printf 'building %s:%s (linux/amd64)\n' "$image" "$tag" >&2
-docker build --platform linux/amd64 -f "$repo_root/relay/Dockerfile" \
-  -t "$image:$tag" "$repo_root"
+# buildx plugin discovery lives under DOCKER_CONFIG; link the installed plugin in.
+mkdir -p "$scratch/cli-plugins"
+for plugin in docker-buildx docker-compose; do
+  src=$(command -v "$plugin" 2>/dev/null || true)
+  [ -n "$src" ] && ln -sf "$(readlink -f "$src" 2>/dev/null || printf '%s' "$src")" "$scratch/cli-plugins/$plugin"
+done
 
 if [ "$dry_run" = 1 ]; then
-  printf 'dry-run: skipping docker login and push\n' >&2
+  printf 'dry-run: buildx build --load only\n' >&2
+  docker buildx build --platform linux/amd64 --load -f "$repo_root/relay/Dockerfile" \
+    -t "$image:$tag" "$repo_root"
   exit 0
 fi
 
-yc container registry get-docker-token | docker login cr.yandex --username iam --password-stdin >/dev/null
-docker push "$image:$tag" >/dev/null
+yc iam create-token | docker login cr.yandex --username iam --password-stdin >/dev/null
+printf 'building+pushing %s:%s (linux/amd64)\n' "$image" "$tag" >&2
+docker buildx build --platform linux/amd64 --push -f "$repo_root/relay/Dockerfile" \
+  -t "$image:$tag" "$repo_root"
 
 digest=$(docker buildx imagetools inspect "$image:$tag" --format '{{.Manifest.Digest}}' 2>/dev/null \
   || docker inspect --format '{{index .RepoDigests 0}}' "$image:$tag" | sed 's/.*@//')

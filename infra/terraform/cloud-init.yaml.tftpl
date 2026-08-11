@@ -152,10 +152,12 @@ write_files:
       	admin 127.0.0.1:2019
       	auto_https disable_redirects
       	servers {
-      		read_header 5s
-      		read 30s
-      		write 300s
-      		idle 120s
+      		timeouts {
+      			read_body 30s
+      			read_header 5s
+      			write 300s
+      			idle 120s
+      		}
       		max_header_size 32KB
       	}
       }

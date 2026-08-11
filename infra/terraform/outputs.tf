@@ -19,5 +19,5 @@ output "push_url" {
 }
 
 output "bootstrap_command" {
-  value = "ssh pimobile@${yandex_vpc_address.pi_mobile.external_ipv4_address[0].address} sudo /usr/local/bin/pimobile-bootstrap-read"
+  value = "ssh ubuntu@${yandex_vpc_address.pi_mobile.external_ipv4_address[0].address} sudo /usr/local/bin/pimobile-bootstrap-read"
 }

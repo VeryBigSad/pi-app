@@ -371,6 +371,15 @@ class GatewayConnectionImpl implements GatewayConnection {
       this.currentPhase = "READY";
       return;
     }
+    if (message.type === "push.endpoint" || message.type === "push.endpoint.revoke") {
+      if (this.currentPhase !== "USER_AUTHENTICATED" && this.currentPhase !== "SYNCING" && this.currentPhase !== "READY") throw this.phaseError();
+      const runtime = this.options.pushEndpoints;
+      if (runtime === undefined) throw new GatewayRuntimeError("PROTOCOL_VIOLATION", "Known mutation has no gateway runtime");
+      const facts = this.requireMutualFacts();
+      if (message.type === "push.endpoint") await runtime.register(facts.deviceId, message.body);
+      else await runtime.revoke(facts.deviceId, message.body);
+      return;
+    }
     if (READY_ONLY.has(message.type)) {
       if (this.currentPhase !== "READY") throw this.phaseError();
       await this.handleReady(message);

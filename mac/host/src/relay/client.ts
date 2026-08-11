@@ -146,11 +146,17 @@ export class MacRelayClient {
     const pongListener: RelaySocketListener = () => {
       if (generation === this.generation && this.stage === "ready") this.lastPongMs = this.options.clock.nowMs();
     };
-    const closeListener: RelaySocketListener = () => {
-      this.recordAndReconnect(generation, new RelayError("RELAY_TRANSPORT", "relay control connection closed"));
+    const closeListener: RelaySocketListener = (...arguments_: unknown[]) => {
+      const code = typeof arguments_[0] === "number" ? String(arguments_[0]) : "unknown";
+      const reason = Buffer.isBuffer(arguments_[1]) ? arguments_[1].toString("utf8").slice(0, 120) : "";
+      this.recordAndReconnect(
+        generation,
+        new RelayError("RELAY_TRANSPORT", `relay control connection closed (${code}${reason.length > 0 ? `: ${reason}` : ""})`),
+      );
     };
-    const errorListener: RelaySocketListener = () => {
-      this.recordAndReconnect(generation, new RelayError("RELAY_TRANSPORT", "relay control connection failed"));
+    const errorListener: RelaySocketListener = (...arguments_: unknown[]) => {
+      const detail = arguments_[0] instanceof Error ? arguments_[0].message : "unknown";
+      this.recordAndReconnect(generation, new RelayError("RELAY_TRANSPORT", `relay control connection failed: ${detail.slice(0, 120)}`));
     };
     socket.on("open", openListener);
     socket.on("message", messageListener);
@@ -227,8 +233,11 @@ export class MacRelayClient {
   private sendControl(generation: number, socket: RelayWebSocket, value: object): void {
     const raw = JSON.stringify(value);
     socket.send(raw, { binary: false, compress: false }, (error) => {
-      if (error !== undefined) {
-        this.recordAndReconnect(generation, new RelayError("RELAY_TRANSPORT", "relay control write failed"));
+      if (error != null) {
+        this.recordAndReconnect(
+          generation,
+          new RelayError("RELAY_TRANSPORT", `relay control write failed: ${String(error?.message ?? "unknown").slice(0, 120)}`),
+        );
       }
     });
   }
@@ -242,7 +251,7 @@ export class MacRelayClient {
         return;
       }
       socket.ping((error) => {
-        if (error !== undefined) {
+        if (error != null) {
           this.recordAndReconnect(generation, new RelayError("RELAY_TRANSPORT", "relay control ping failed"));
         }
       });

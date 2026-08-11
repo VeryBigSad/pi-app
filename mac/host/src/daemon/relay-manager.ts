@@ -183,7 +183,7 @@ export class RelayManager {
       ...(this.options.onPairingRequest === undefined ? {} : { onPairingRequest: this.options.onPairingRequest }),
       onStateChange: (state, fault) => {
         this.lastState = state;
-        this.lastFaultCode = fault?.code;
+        this.lastFaultCode = fault === undefined ? undefined : `${fault.code}: ${fault.message}`;
         this.options.onStateChange?.(state, fault);
       },
     });

@@ -4,6 +4,7 @@ import { constants } from "node:fs";
 import { open, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { ApprovalOffer } from "@pimobile/approval";
+import type { JsonObject } from "@pimobile/protocol";
 import { MANIFEST_VERSION } from "@pimobile/compatibility";
 import { PINNED_PI_VERSION } from "@pimobile/pi-patch";
 import { createHostGateway } from "../gateway/host-gateway.js";
@@ -75,7 +76,7 @@ export interface DaemonStatus {
   readonly relay: { state: string; fault?: string; routeId?: string };
   readonly terminal: { available: boolean; reason?: string };
   readonly voice: { queueSize: number };
-  readonly push: { configured: boolean; published: number; failed: number };
+  readonly push: { configured: boolean; published: number; failed: number; skipped: number };
   readonly listeners: { directPort: number; provisionalPort: number };
   readonly pendingApprovals: number;
 }
@@ -153,7 +154,7 @@ export class HostDaemon {
     this.journal = new SqliteCommandJournal(this.layout.journalPath);
 
     const pendingApprovals = this.pendingApprovals;
-    this.push = new NtfyPushPublisher(parseNtfyConfig(this.config.ntfy));
+    this.push = new NtfyPushPublisher(parseNtfyConfig(this.config.ntfy), () => this.store?.pushEndpoint());
     const supervisor = new RuntimeSupervisor({
       dataDirectory: this.layout.dataDirectory,
       approvalSocketPath: this.layout.approvalSocketPath,
@@ -227,6 +228,10 @@ export class HostDaemon {
       blobs,
       terminal: terminal ?? disabledTerminalRuntime,
       voice: new GatewayVoiceRuntime(this.voice),
+      pushEndpoints: {
+        register: (deviceId, body) => this.registerPushEndpoint(deviceId, body),
+        revoke: (deviceId, body) => this.revokePushEndpoint(deviceId, body),
+      },
       ...(this.config.passkeySessionTtlMs === undefined ? {} : { passkeySessionTtlMs: this.config.passkeySessionTtlMs }),
     });
 
@@ -276,6 +281,36 @@ export class HostDaemon {
     const runtime = this.supervisor?.pinnedRuntime();
     if (runtime === undefined) throw new Error("RUNTIME_NOT_READY");
     return runtime.root;
+  }
+
+  private async registerPushEndpoint(deviceId: string, body: JsonObject): Promise<void> {
+    const store = this.store;
+    if (store === undefined) throw new SecurityError("SECURITY_KEY_STORAGE_FAILED", "host store is not loaded");
+    const endpointId = body["endpointId"];
+    const distributor = body["distributor"];
+    const endpoint = body["endpoint"];
+    if (typeof endpointId !== "string" || typeof distributor !== "string" || typeof endpoint !== "string") {
+      throw new SecurityError("SECURITY_INVALID_INPUT", "push endpoint message is invalid");
+    }
+    const wakeKey = body["wakePublicKey"];
+    const existing = store.pushEndpoint();
+    const wakePublicKey = typeof wakeKey === "string"
+      ? wakeKey
+      : existing?.deviceId === deviceId
+        ? existing.wakePublicKey
+        : undefined;
+    if (wakePublicKey === undefined) {
+      throw new SecurityError("SECURITY_INVALID_INPUT", "push endpoint message is invalid");
+    }
+    await store.setPushEndpoint({ deviceId, endpointId, distributor, endpoint, wakePublicKey });
+  }
+
+  private async revokePushEndpoint(deviceId: string, body: JsonObject): Promise<void> {
+    const endpointId = body["endpointId"];
+    if (typeof endpointId !== "string") {
+      throw new SecurityError("SECURITY_INVALID_INPUT", "push endpoint revoke message is invalid");
+    }
+    await this.store?.clearPushEndpoint(deviceId, endpointId);
   }
 
   private onSettlement(notice: SettlementNotice): void {
@@ -557,7 +592,7 @@ export class HostDaemon {
         ? { available: false, ...(this.terminalUnavailable === undefined ? {} : { reason: this.terminalUnavailable }) }
         : { available: true },
       voice: { queueSize: this.voice?.status().queueSize ?? 0 },
-      push: this.push?.status() ?? { configured: false, published: 0, failed: 0 },
+      push: this.push?.status() ?? { configured: false, published: 0, failed: 0, skipped: 0 },
       listeners: this.boundPorts,
       pendingApprovals: this.pendingApprovals.size,
     };
@@ -636,10 +671,12 @@ export class HostDaemon {
     if (raw === undefined) return { directPort: 4411, provisionalPort: 4412 };
     const ports = raw["ports"];
     const relay = raw["relay"];
+    const ntfy = raw["ntfy"];
     const config: HostDaemonConfig = {
       directPort: readPort(ports, "direct", 4411),
       provisionalPort: readPort(ports, "provisional", 4412),
       ...readPasskeySessionTtl(raw["passkeySessionTtlMs"]),
+      ...(ntfy === undefined ? {} : { ntfy }),
     };
     if (relay === undefined) return config;
     if (typeof relay !== "object" || relay === null || Array.isArray(relay)) {

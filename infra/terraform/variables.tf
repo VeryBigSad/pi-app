@@ -99,3 +99,9 @@ variable "labels" {
     managedby = "terraform"
   }
 }
+
+variable "network_name" {
+  type        = string
+  description = "Existing VPC network to reuse (folder quota allows one network)"
+  default     = "default"
+}

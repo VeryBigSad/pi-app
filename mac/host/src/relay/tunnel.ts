@@ -120,7 +120,7 @@ export class RelayTunnel extends Duplex {
     }
     const chunk = bytes.subarray(offset, Math.min(offset + DATA_MESSAGE_MAX_BYTES, bytes.byteLength));
     this.socket.send(chunk, { binary: true, compress: false }, (error) => {
-      if (error !== undefined) {
+      if (error != null) {
         callback(new RelayError("RELAY_TRANSPORT", "relay tunnel write failed"));
         return;
       }
