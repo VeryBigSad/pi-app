@@ -46,11 +46,12 @@ variable "ssh_public_key" {
   }
 }
 
-variable "relay_image" {
-  type = string
+variable "relay_image_digest" {
+  description = "Immutable sha256 digest of the relay image, pushed to the pi-mobile Yandex Container Registry by infra/local/push-relay-image.sh. The full reference cr.yandex/<registry-id>/relay@<digest> is constructed from the registry resource."
+  type        = string
   validation {
-    condition     = can(regex("^ghcr\\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$", var.relay_image))
-    error_message = "relay_image must be a lowercase immutable GHCR digest"
+    condition     = can(regex("^sha256:[0-9a-f]{64}$", var.relay_image_digest))
+    error_message = "relay_image_digest must be a lowercase sha256:<64 hex> digest"
   }
 }
 

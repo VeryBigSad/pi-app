@@ -57,6 +57,23 @@ resource "yandex_vpc_security_group" "pi_mobile" {
   }
 }
 
+resource "yandex_container_registry" "pi_mobile" {
+  name      = "pi-mobile"
+  folder_id = var.folder_id
+  labels    = var.labels
+}
+
+resource "yandex_iam_service_account" "vm" {
+  name      = "pimobile-vm"
+  folder_id = var.folder_id
+}
+
+resource "yandex_container_registry_iam_binding" "vm_puller" {
+  registry_id = yandex_container_registry.pi_mobile.id
+  role        = "container-registry.images.puller"
+  members     = ["serviceAccount:${yandex_iam_service_account.vm.id}"]
+}
+
 locals {
   public_ip_token = replace(yandex_vpc_address.pi_mobile.external_ipv4_address[0].address, ".", "-")
   relay_host      = "relay.${local.public_ip_token}.sslip.io"
@@ -64,7 +81,7 @@ locals {
   cloud_init = templatefile("${path.module}/cloud-init.yaml.tftpl", {
     relay_host  = local.relay_host
     push_host   = local.push_host
-    relay_image = var.relay_image
+    relay_image = "cr.yandex/${yandex_container_registry.pi_mobile.id}/relay@${var.relay_image_digest}"
     caddy_image = var.caddy_image
     ntfy_image  = var.ntfy_image
   })
@@ -103,6 +120,8 @@ resource "yandex_compute_instance" "pi_mobile" {
   scheduling_policy {
     preemptible = false
   }
+
+  service_account_id = yandex_iam_service_account.vm.id
 
   metadata = {
     serial-port-enable = "0"

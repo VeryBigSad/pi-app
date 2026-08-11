@@ -4,7 +4,7 @@ set -euo pipefail
 module=$(cd "$(dirname "$0")/../terraform" && pwd)
 relay_host=${RELAY_HOST:-relay.203-0-113-10.sslip.io}
 push_host=${PUSH_HOST:-push.203-0-113-10.sslip.io}
-relay_image=${RELAY_IMAGE:-ghcr.io/verybigsad/pi-app/relay@sha256:1111111111111111111111111111111111111111111111111111111111111111}
+relay_image=${RELAY_IMAGE:-cr.yandex/crp000000000000000000/relay@sha256:1111111111111111111111111111111111111111111111111111111111111111}
 caddy_image=${CADDY_IMAGE:-docker.io/library/caddy@sha256:844f60b64e4724a5aa8245e019dace0d3f199f7433ce6c57676cb30a920dbad9}
 ntfy_image=${NTFY_IMAGE:-docker.io/binwiederhier/ntfy@sha256:f2419f405127afa868f10985c1a41449e673477cee1eb19994339a5ae8b592e7}
 vars=$(jq -cn \

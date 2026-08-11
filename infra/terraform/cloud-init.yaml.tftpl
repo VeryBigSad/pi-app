@@ -214,6 +214,28 @@ write_files:
       visitor-subscription-limit: 30
       log-level: warn
       log-format: json
+  - path: /usr/local/sbin/pimobile-registry-login
+    permissions: "0700"
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      fail() {
+        printf 'pimobile-registry-login: %s\n' "$*" >&2
+        exit 1
+      }
+      token=''
+      for attempt in $(seq 1 12); do
+        token=$(curl --fail --silent --show-error --max-time 10 \
+          -H 'Metadata-Flavor: Google' \
+          'http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token' \
+          | sed -n 's/.*"access_token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p') && break
+        token=''
+        sleep 5
+      done
+      [ -n "$token" ] || fail 'metadata service-account token unavailable'
+      printf '%s' "$token" | /usr/bin/docker login cr.yandex --username iam --password-stdin >/dev/null
+      unset token
   - path: /usr/local/bin/pimobile-compose
     permissions: "0755"
     owner: root:root
@@ -400,8 +422,8 @@ write_files:
       }
       validate_ref() {
         case "$2" in
-          ghcr.io/*@sha256:* | docker.io/*@sha256:*) : ;;
-          *) fail "$1 must be a ghcr.io or docker.io digest reference" ;;
+          cr.yandex/*@sha256:* | ghcr.io/*@sha256:* | docker.io/*@sha256:*) : ;;
+          *) fail "$1 must be a cr.yandex, ghcr.io, or docker.io digest reference" ;;
         esac
         digest=$${2##*@sha256:}
         [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || fail "$1 digest malformed"
@@ -455,12 +477,28 @@ write_files:
         printf 'pimobile-update: image set unchanged\n'
         exit 0
       fi
+      # Default update source is the private Yandex Container Registry: the VM
+      # pulls the pinned digest with its service-account IAM token, no GitHub
+      # dependency. Publishing a new relay image to YC CR is an operator step
+      # (infra/local/push-relay-image.sh, which uses `yc cr token`).
+      # The cosign check below applies only to GHCR references and is kept for
+      # the optional public-provenance path.
       if [ "$RELAY_IMAGE" != "$relay_current" ]; then
-        . "$policy_file"
-        /usr/bin/docker run --rm "$COSIGN_IMAGE" verify \
-          --certificate-identity "$COSIGN_CERTIFICATE_IDENTITY" \
-          --certificate-oidc-issuer "$COSIGN_OIDC_ISSUER" \
-          "$RELAY_IMAGE" >/dev/null || fail "cosign verification failed for $RELAY_IMAGE"
+        case "$RELAY_IMAGE" in
+          cr.yandex/*)
+            /usr/local/sbin/pimobile-registry-login
+            ;;
+          ghcr.io/*)
+            . "$policy_file"
+            /usr/bin/docker run --rm "$COSIGN_IMAGE" verify \
+              --certificate-identity "$COSIGN_CERTIFICATE_IDENTITY" \
+              --certificate-oidc-issuer "$COSIGN_OIDC_ISSUER" \
+              "$RELAY_IMAGE" >/dev/null || fail "cosign verification failed for $RELAY_IMAGE"
+            ;;
+          *)
+            fail "RELAY_IMAGE must reference cr.yandex or ghcr.io"
+            ;;
+        esac
       fi
       cp "$env_file" "$previous_file"
       replacement=$(mktemp)
@@ -511,6 +549,7 @@ write_files:
       Type=oneshot
       RemainAfterExit=yes
       WorkingDirectory=/opt/pimobile
+      ExecStartPre=/usr/local/sbin/pimobile-registry-login
       ExecStartPre=/usr/local/sbin/pimobile-first-boot
       ExecStartPre=/usr/local/bin/pimobile-compose config --quiet
       ExecStart=/usr/local/bin/pimobile-compose up --detach --remove-orphans

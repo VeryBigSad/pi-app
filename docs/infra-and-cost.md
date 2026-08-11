@@ -22,6 +22,8 @@ GitHub Pages separately serves `verybigsad.github.io/.well-known/assetlinks.json
 - budget/monitoring resources where supported;
 - DNS hostname using the reserved IP through `sslip.io` unless a user-owned domain is supplied before apply.
 
+Image registry: one private Yandex Container Registry `pi-mobile` stores the relay image; the VM service account `pimobile-vm` has `container-registry.images.puller` at registry level only. Registry storage is a small additional recurring cost (tens of MiB per kept digest; prune unneeded ones).
+
 A hard cost gate is enforced in code: `monthly_cost_estimate_rub` must not exceed `max_monthly_cost_rub` (default **₽1,500**); `main.tf` fails validation with an explicit error otherwise, and the cap can only be raised deliberately.
 
 Public ingress:
@@ -65,7 +67,7 @@ Pin Terraform/YC provider versions and commit `.terraform.lock.hcl`. `.gitignore
 
 `cloud-init.yaml.tftpl` renders a docker-compose stack where **every service runs as a dedicated nonroot UID** (relay 65532, ntfy 65533, Caddy 65534) with `read_only: true`, `no-new-privileges`, `cap_drop: [ALL]`, tmpfs `/tmp`, per-service resource limits (pids/memory/cpus), JSON-log rotation, and an HTTP `healthcheck` each. Package versions (docker.io, compose, openssl, curl) are pinned in cloud-config.
 
-Image trust: the relay image is cosign-verified at boot against a pinned policy (`/etc/pimobile/cosign-policy`, keyless identity `VeryBigSad/pi-app/.github/workflows/relay-image.yml`, issuer `token.actions.githubusercontent.com`). Updates go through `/usr/local/sbin/pimobile-update` + `pi-mobile-update.service`: stage signed image references, apply via systemd, health-check, and **automatic rollback to the previous image set** if unhealthy (`infra/local/verify-relay-image.sh` exercises the verification path locally).
+Image trust: the relay image is pulled at boot by pinned digest from a **private Yandex Container Registry** (`yandex_container_registry.pi_mobile`); the VM's dedicated `pimobile-vm` service account holds only `container-registry.images.puller` on that registry, and cloud-init performs `docker login cr.yandex` with an IAM token from the instance metadata endpoint (retry loop) before pulling. This replaces the earlier anonymous-GHCR + runtime-cosign design: there is no GitHub dependency at runtime and no registry credential in Terraform state or cloud-init. GHCR + cosign remains as **public provenance only** (optional; `infra/local/verify-relay-image.sh` exercises it). Updates go through `/usr/local/sbin/pimobile-update` + `pi-mobile-update.service`: stage pinned digest references (default source YC CR, authenticated via the VM service account; cosign verification applies only to optional `ghcr.io/...` references), apply via systemd, health-check, and **automatic rollback to the previous image set** if unhealthy. Publishing a new relay image to YC CR is an operator step: `infra/local/push-relay-image.sh --registry-id <cr-id>` (builds `relay/Dockerfile` for linux/amd64, logs in via `yc container registry get-docker-token`, pushes, prints the digest for `relay_image_digest`).
 
 ## Secret bootstrap
 
@@ -134,6 +136,7 @@ Planning target, including VAT/region variation:
 | 10–13 GiB network HDD | small fixed cost |
 | Reserved active IPv4 | fixed cost |
 | Caddy, relay, ntfy software | ₽0 license/service fee |
+| Container Registry storage (relay digests) | small fixed cost |
 | GitHub Pages | ₽0 direct fee |
 | **Fixed planning envelope** | **about ₽900–1,500/month** |
 

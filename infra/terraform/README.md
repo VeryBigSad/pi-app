@@ -1,6 +1,6 @@
 # Relay infrastructure
 
-This module owns one dedicated, always-on Yandex Cloud deployment: one non-preemptible `standard-v4a` VM (AMD EPYC Genoa platform, available in `ru-central1-d`), one 13 GiB auto-deleted network HDD boot disk, one reserved public IPv4 address, one VPC/subnet, and one security group. The VM uses 2 vCPU at 20% core fraction and 2 GiB RAM. Only TCP 443 is public; TCP 22 is limited to `admin_cidr`. There is no public TCP 80 listener.
+This module owns one dedicated, always-on Yandex Cloud deployment: one non-preemptible `standard-v4a` VM (AMD EPYC Genoa platform, available in `ru-central1-d`), one 13 GiB auto-deleted network HDD boot disk, one reserved public IPv4 address, one VPC/subnet, one security group, one private container registry, and one VM service account with registry-level pull rights only. The VM uses 2 vCPU at 20% core fraction and 2 GiB RAM. Only TCP 443 is public; TCP 22 is limited to `admin_cidr`. There is no public TCP 80 listener.
 
 Caddy terminates TLS 1.3 for `relay.<IP>.sslip.io` and `push.<IP>.sslip.io`. ACME uses the TLS-ALPN challenge on 443, so no paid DNS zone or HTTP challenge port is required. `sslip.io` is an external DNS dependency; use owned DNS before relying on this beyond a personal deployment.
 
@@ -8,21 +8,21 @@ Caddy terminates TLS 1.3 for `relay.<IP>.sslip.io` and `push.<IP>.sslip.io`. ACM
 
 Terraform is constrained to provider `yandex-cloud/yandex` 0.220.0. `terraformrc` permits installation only through the Yandex Cloud provider mirror, and `.terraform.lock.hcl` locks Darwin arm64 and Linux amd64 checksums. The VM boot image is an explicit immutable `boot_image_id`; do not replace it with an image family data source. All three Compose images must be digest references.
 
-The relay workflow is configured to publish only `sha-<commit>`, sign its digest with GitHub Actions OIDC via cosign, and attach BuildKit provenance and SBOM attestations. Its final anonymous pull and signature verification intentionally fail if the GHCR container package is private.
+## Relay image trust model
 
-A private GitHub repository does not make its GHCR package anonymously pullable. This deployment contains no registry credential. After the first workflow publication, confirm the container package itself is public and rerun the workflow if its anonymous gate failed. Never put a GitHub token in Terraform variables, cloud-init, instance metadata, or state.
+Runtime: the VM pulls the relay image by pinned digest from a **private Yandex Container Registry** (`yandex_container_registry.pi_mobile`). The VM's dedicated service account `pimobile-vm` holds only `container-registry.images.puller` on that registry (registry-level IAM, not folder-wide) and no other role; cloud-init fetches an IAM token from the instance metadata endpoint and runs `docker login cr.yandex` before the first compose pull. There is no GitHub dependency at runtime and no registry credential in Terraform variables, state, or cloud-init.
 
-Verify the selected relay digest independently before planning:
+`relay_image_digest` is a `sha256:<64 hex>` variable; the full reference `cr.yandex/<registry-id>/relay@<digest>` is constructed from the registry resource, because the registry id exists only after apply. The digest must stay pinned; mutable tags are rejected by validation.
+
+Publishing is an operator step, before the first plan:
 
 ```sh
-docker logout ghcr.io
-
-docker pull ghcr.io/verybigsad/pi-app/relay@sha256:<digest>
-cosign verify \
-  --certificate-identity 'https://github.com/VeryBigSad/pi-app/.github/workflows/relay-image.yml@refs/heads/main' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/verybigsad/pi-app/relay@sha256:<digest>
+infra/local/push-relay-image.sh --registry-id <cr-id>   # prints relay_image_digest for tfvars
 ```
+
+The registry id is known only after its first apply; for a fresh deployment run a targeted bootstrap (`terraform apply -target=yandex_container_registry.pi_mobile`), push the image, then run the full plan with the printed digest.
+
+Public provenance: the GHCR workflow still publishes `sha-<commit>` tags signed with GitHub Actions OIDC via cosign plus BuildKit provenance/SBOM attestations. That path is optional provenance only — `infra/local/verify-relay-image.sh` exercises it. The VM's update path cosign-verifies only `ghcr.io/...` references; the default update source is the YC CR pinned digest. Never put a GitHub token in Terraform variables, cloud-init, instance metadata, or state.
 
 ## Inputs and state
 
@@ -74,7 +74,7 @@ terraform show /absolute/path/to/pi-mobile.tfplan
 unset YC_TOKEN
 ```
 
-Before any apply, the plan must show exactly one `yandex_compute_instance`, one `yandex_vpc_address`, no preemptible scheduling, only the intended 443/22 ingress, the pinned boot image ID, and no replacement or deletion of unrelated resources. Required external prerequisites are a Yandex Cloud principal with sufficient Compute/VPC permissions and quota, the target folder and zone, a current restricted operator CIDR, an Ed25519 key, a public anonymously pullable signed relay digest, outbound access for apt/image pulls/ACME, working `sslip.io` resolution, and an approved current calculator estimate. This repository does not establish those external facts.
+Before any apply, the plan must show exactly one `yandex_compute_instance`, one `yandex_vpc_address`, one `yandex_container_registry` with its `images.puller` binding to only the `pimobile-vm` service account, no preemptible scheduling, only the intended 443/22 ingress, the pinned boot image ID, and no replacement or deletion of unrelated resources. Required external prerequisites are a Yandex Cloud principal with sufficient Compute/VPC permissions and quota, the target folder and zone, a current restricted operator CIDR, an Ed25519 key, the relay image digest already pushed to the pi-mobile registry by `push-relay-image.sh`, outbound access for apt/image pulls/ACME, working `sslip.io` resolution, and an approved current calculator estimate. This repository does not establish those external facts.
 
 ## First boot and restart
 
@@ -103,15 +103,15 @@ Cloud-init runs once per instance, so changing a digest in `cloud-init.yaml.tftp
 
 ```sh
 ssh pimobile@<public-ip>
-sudo /usr/local/sbin/pimobile-update stage RELAY_IMAGE=ghcr.io/verybigsad/pi-app/relay@sha256:<digest>
+sudo /usr/local/sbin/pimobile-update stage RELAY_IMAGE=cr.yandex/<registry-id>/relay@sha256:<digest>
 sudo systemctl start pi-mobile-update.service
 ```
 
-`stage` accepts `RELAY_IMAGE`, `CADDY_IMAGE`, and `NTFY_IMAGE` digest references and writes `/etc/pimobile/images.env.next`; the systemd unit only runs when that file exists. Before any change, the update verifies the new relay digest's cosign signature against the pinned GitHub Actions workflow identity in `/etc/pimobile/cosign-policy` (this is the automatic deployment-time identity check; Caddy and ntfy digests are upstream images and are not signed by this repository). It then records the previous image set, pulls, recreates containers, and requires relay, ntfy, and Caddy healthchecks plus valid ACME certificates through `pimobile-await-healthy`. An unhealthy update rolls back to the previous image set automatically; `sudo /usr/local/sbin/pimobile-update rollback` repeats that manually. The service fails closed and unsigned or unverifiable relay digests are never applied.
+`stage` accepts `RELAY_IMAGE`, `CADDY_IMAGE`, and `NTFY_IMAGE` digest references and writes `/etc/pimobile/images.env.next`; the systemd unit only runs when that file exists. Before any change, the update verifies the new relay digest's cosign signature against the pinned GitHub Actions workflow identity in `/etc/pimobile/cosign-policy` (this is the automatic deployment-time identity check; YC CR references authenticate via the VM service account instead; Caddy and ntfy digests are upstream images and are not signed by this repository). It then records the previous image set, pulls, recreates containers, and requires relay, ntfy, and Caddy healthchecks plus valid ACME certificates through `pimobile-await-healthy`. An unhealthy update rolls back to the previous image set automatically; `sudo /usr/local/sbin/pimobile-update rollback` repeats that manually. The service fails closed and unsigned or unverifiable relay digests are never applied.
 
 ## Cost and destroy
 
-The recurring cost envelope consists of the non-preemptible VM CPU/RAM, 13 GiB network HDD, reserved public IPv4 address, and billable outbound traffic. Container registry usage and current Yandex Cloud pricing or quotas may add constraints. No fixed currency estimate is claimed here because rates and discounts change; recalculate in the official calculator for the selected folder, zone, expected traffic, and month length immediately before apply. Stopping the VM does not release its disk or reserved address and is not a complete cost stop.
+The recurring cost envelope consists of the non-preemptible VM CPU/RAM, 13 GiB network HDD, reserved public IPv4 address, Container Registry storage (the private pi-mobile registry holds relay images; a single small Go image is tens of MiB, keep only needed digests), and billable outbound traffic. Current Yandex Cloud pricing or quotas may add constraints. No fixed currency estimate is claimed here because rates and discounts change; recalculate in the official calculator for the selected folder, zone, expected traffic, and month length immediately before apply. Stopping the VM does not release its disk or reserved address and is not a complete cost stop.
 
 Destroy is destructive: relay registrations/revocations, ntfy auth/cache, and Caddy state live only on the auto-deleted boot disk. Preserve only the intended non-content recovery material before proceeding. Destroy applies a reviewed saved plan artifact, never an unreviewed inline destroy:
 

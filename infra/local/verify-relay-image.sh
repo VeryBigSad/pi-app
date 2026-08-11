@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Verifies a relay image digest before it is trusted by Terraform or by the
-# in-place VM update path: anonymous pull from GHCR plus a cosign signature
-# check against the pinned GitHub Actions workflow identity. Uses a scratch
-# DOCKER_CONFIG so no local registry credential can mask anonymity.
+# Optional public-provenance check for the GHCR relay image: anonymous pull
+# plus a cosign signature verification against the pinned GitHub Actions
+# workflow identity. This is NOT the runtime path — the VM pulls the pinned
+# digest from the private Yandex Container Registry with its service account.
+# Uses a scratch DOCKER_CONFIG so no local registry credential can mask
+# anonymity.
 set -euo pipefail
 
 image=${1:-${RELAY_IMAGE:-}}

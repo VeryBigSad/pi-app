@@ -1,3 +1,7 @@
+output "registry_id" {
+  value = yandex_container_registry.pi_mobile.id
+}
+
 output "instance_id" {
   value = yandex_compute_instance.pi_mobile.id
 }
