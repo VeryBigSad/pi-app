@@ -6,6 +6,12 @@
     "outDir": "dist",
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
-  "references": [{ "path": "../../protocol/ts" }, { "path": "../compatibility" }],
+  "references": [
+    { "path": "../../protocol/ts" },
+    { "path": "../compatibility" },
+    { "path": "../approval" },
+    { "path": "../pi-patch" },
+    { "path": "../preload" }
+  ],
   "include": ["src/**/*.ts", "test/**/*.ts"]
 }
