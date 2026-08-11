@@ -33,21 +33,31 @@ function cloneCanary(): boolean {
   const source = { enabled: true, nested: [1, "two", null] };
   const clone = structuredClone(source);
   if (clone === source || clone.nested === source.nested || clone.nested[1] !== "two") return false;
-  let rejectedObject = false;
-  let rejectedCycle = false;
-  try {
-    structuredClone(new Date());
-  } catch {
-    rejectedObject = true;
-  }
   const cyclic: { self?: object } = {};
   cyclic.self = cyclic;
-  try {
-    structuredClone(cyclic);
-  } catch {
-    rejectedCycle = true;
+  if (installedNarrowStructuredClone) {
+    // Shim semantics: non-plain objects and cycles must be rejected.
+    try {
+      structuredClone(new Date());
+      return false;
+    } catch {
+      // expected
+    }
+    try {
+      structuredClone(cyclic);
+      return false;
+    } catch {
+      // expected
+    }
+    return true;
   }
-  return (!installedNarrowStructuredClone || rejectedObject) && rejectedCycle;
+  // Native semantics: cycles must clone into a deep, self-referential copy.
+  try {
+    const cloned = structuredClone(cyclic) as { self?: object };
+    return cloned !== cyclic && cloned.self === cloned;
+  } catch {
+    return false;
+  }
 }
 
 function boot(): void {

@@ -100,6 +100,34 @@ describe("terminal assets", () => {
     expect(runtime).toContain('addEventListener("focus"');
   });
 
+  it("installs the structuredClone shim synchronously before the canary probe", async () => {
+    const runtime = await readFile(resolve(root, "android/terminal/web/src/terminal.ts"), "utf8");
+    const shim = await readFile(resolve(root, "android/terminal/web/src/compat.ts"), "utf8");
+    const bundle = await readFile(resolve(assetDirectory, "terminal.js"), "utf8");
+    // The compat module must be the first import so esbuild emits it ahead of the canary.
+    expect(runtime.trimStart().startsWith('import { installedNarrowStructuredClone } from "./compat.js";')).toBe(true);
+    // Shim installs at module scope, before boot() and the canary run.
+    expect(shim).toContain("globalThis.structuredClone =");
+    expect(runtime.indexOf("installedNarrowStructuredClone")).toBeLessThan(runtime.indexOf("cloneCanary()"));
+    // In the bundled (minified) IIFE the shim marker must precede the canary report marker.
+    const shimMarker = bundle.indexOf("DataCloneError");
+    const canaryMarker = bundle.indexOf("TERMINAL_RUNTIME_CANARY_FAILED");
+    expect(shimMarker).toBeGreaterThanOrEqual(0);
+    expect(canaryMarker).toBeGreaterThanOrEqual(0);
+    expect(shimMarker).toBeLessThan(canaryMarker);
+  });
+
+  it("accepts either native structuredClone or the functioning shim in the clone canary", async () => {
+    const runtime = await readFile(resolve(root, "android/terminal/web/src/terminal.ts"), "utf8");
+    const cloneCanary = runtime.slice(runtime.indexOf("function cloneCanary"), runtime.indexOf("function boot"));
+    // Shim path: non-plain objects and cycles must be rejected.
+    expect(cloneCanary).toContain("if (installedNarrowStructuredClone)");
+    // Native path: cycles must clone into a self-referential deep copy.
+    expect(cloneCanary).toContain("cloned.self === cloned");
+    // The old shim-only expectation (cycles always throw) must be gone.
+    expect(cloneCanary).not.toContain("rejectedCycle");
+  });
+
   it("keeps readiness fail-closed on canary failure in JS and native", async () => {
     const runtime = await readFile(resolve(root, "android/terminal/web/src/terminal.ts"), "utf8");
     const native = await readFile(resolve(root, "android/terminal/src/main/kotlin/io/github/verybigsad/pimobile/terminal/TerminalRuntime.kt"), "utf8");
