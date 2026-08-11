@@ -72,6 +72,9 @@ class PasskeyClient(private val activity: Activity) : PasskeyCeremonyPerformer {
         if (origin == null || origin !in PasskeyOrigins.allowedAndroidOrigins()) {
             return PasskeyAvailability.Locked(PasskeyLockReason.APPLICATION_IDENTITY_MISMATCH)
         }
+        if (PasskeyDebugHooks.executor != null) {
+            return PasskeyAvailability.Available(PasskeyProviderKind.PLAY_SERVICES, 1, false)
+        }
         return PasskeyProviderProbe.availability(activity)
     }
 
@@ -79,11 +82,11 @@ class PasskeyClient(private val activity: Activity) : PasskeyCeremonyPerformer {
         val request = runCatching { PasskeyPolicy.registration(optionsJson) }.getOrElse {
             return PasskeyResult.Failed("PASSKEY_REGISTRATION_OPTIONS_INVALID")
         }
-        val unavailable = availability() as? PasskeyAvailability.Locked
-        if (unavailable != null) return PasskeyResult.Locked(unavailable.reason)
         PasskeyDebugHooks.executor?.let { executor ->
             return executeDebug(PasskeyCeremony.REGISTRATION, request) { executor.createCredential(optionsJson) }
         }
+        val unavailable = availability() as? PasskeyAvailability.Locked
+        if (unavailable != null) return PasskeyResult.Locked(unavailable.reason)
         return try {
             val response = manager.createCredential(
                 context = activity,
@@ -112,11 +115,11 @@ class PasskeyClient(private val activity: Activity) : PasskeyCeremonyPerformer {
         val request = runCatching { PasskeyPolicy.assertion(optionsJson) }.getOrElse {
             return PasskeyResult.Failed("PASSKEY_ASSERTION_OPTIONS_INVALID")
         }
-        val unavailable = availability() as? PasskeyAvailability.Locked
-        if (unavailable != null) return PasskeyResult.Locked(unavailable.reason)
         PasskeyDebugHooks.executor?.let { executor ->
             return executeDebug(PasskeyCeremony.ASSERTION, request) { executor.getCredential(optionsJson) }
         }
+        val unavailable = availability() as? PasskeyAvailability.Locked
+        if (unavailable != null) return PasskeyResult.Locked(unavailable.reason)
         return try {
             val response = manager.getCredential(
                 context = activity,

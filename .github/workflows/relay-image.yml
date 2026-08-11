@@ -151,6 +151,7 @@ jobs:
       - env:
           DIGEST: ${{ steps.build.outputs.digest }}
           CERTIFICATE_IDENTITY: ${{ github.server_url }}/${{ github.repository }}/.github/workflows/relay-image.yml@${{ github.ref }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           docker image rm "$IMAGE@$DIGEST" >/dev/null 2>&1 || true
