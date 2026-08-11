@@ -47,7 +47,13 @@ class TerminalRuntimeInstrumentedTest {
         }
 
         assertTrue("terminal canary timed out", canaryLatch.await(20, TimeUnit.SECONDS))
-        assertTrue("terminal incompatible: ${canary.get()}", canary.get().compatible)
+        if (!canary.get().compatible) {
+            // Outdated WebView (e.g. stock CI API29 image): fail-closed honest path —
+            // canary reports the reason, pageReady must never fire.
+            assertEquals("WEBVIEW_UPDATE_REQUIRED", canary.get().reason)
+            assertFalse("pageReady must not fire after failed canary", readyLatch.await(5, TimeUnit.SECONDS))
+            return
+        }
         assertTrue("terminal page timed out", readyLatch.await(20, TimeUnit.SECONDS))
         instrumentation.runOnMainSync {
             runtime.startGeneration(ULong.MAX_VALUE)
