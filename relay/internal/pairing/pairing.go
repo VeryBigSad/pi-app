@@ -97,6 +97,35 @@ func (s *Store) Open(routeID string) (Handle, error) {
 	return handle, nil
 }
 
+// Rotate replaces any existing exchange for the route with a fresh one.
+// The Mac holds at most one active invitation, so a new invitation supersedes
+// the previous rendezvous; the busy conflict and create cooldown do not apply
+// to an intentional rotation.
+func (s *Store) Rotate(routeID string) (Handle, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cleanupLocked()
+	if len(s.byID) >= MaxActive {
+		return Handle{}, ErrFull
+	}
+	if existing, busy := s.byRoute[routeID]; busy {
+		s.destroyLocked(existing)
+	}
+	id, err := s.random(18)
+	if err != nil {
+		return Handle{}, err
+	}
+	secret, err := s.random(32)
+	if err != nil {
+		return Handle{}, err
+	}
+	handle := Handle{ID: id, Secret: secret, ExpiresAt: s.now().Add(Lifetime)}
+	s.byID[id] = &exchange{routeID: routeID, secret: []byte(secret), expires: handle.ExpiresAt}
+	s.byRoute[routeID] = id
+	s.lastCreate[routeID] = s.now()
+	return handle, nil
+}
+
 // SubmitRequest stores the device's one message; only the first submission
 // with the correct secret is accepted.
 func (s *Store) SubmitRequest(routeID, id, secret string, message []byte) error {

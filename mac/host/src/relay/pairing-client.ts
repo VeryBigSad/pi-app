@@ -166,16 +166,19 @@ export class RelayPairingClient {
     signal?: AbortSignal,
   ): Promise<{ response: RelayPairingFetchResponse; status: number }> {
     const snapshot = await this.options.keyRing.snapshot();
+    let lastRejectionDetail = "no candidates";
     for (const signer of await this.options.keyRing.authenticationCandidates()) {
       const response = await this.request(method, endpoint, body, signer, snapshot.routeId, signal);
       if (accepted.includes(response.status)) return { response, status: response.status };
+      // eslint-disable-next-line no-control-regex -- sanitizing control chars for logs
+      lastRejectionDetail = `status ${String(response.status)} ${Buffer.from(response.body).toString("utf8").replace(/[\u0000-\u001f]/g, " ").slice(0, 160)}`;
       if (response.status === 401) continue;
       if (response.status === 409 || response.status === 429 || response.status === 503) {
         throw new RelayError("RELAY_RESOURCE_EXHAUSTED", `relay pairing rejected with status ${String(response.status)}`);
       }
       throw new RelayError("RELAY_ADMIN_REJECTED", `relay pairing rejected with status ${String(response.status)}`);
     }
-    throw new RelayError("RELAY_ADMIN_REJECTED", "relay pairing authentication was rejected");
+    throw new RelayError("RELAY_ADMIN_REJECTED", `relay pairing authentication was rejected: ${lastRejectionDetail}`);
   }
 
   private async request(

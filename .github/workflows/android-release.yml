@@ -1,7 +1,7 @@
 name: Android Release
 
 # Manual, assisted-release pipeline: build/verify signed APK, mirror it anonymously to
-# VeryBigSad/pi-app-releases, generate update-v1.json deterministically, publish the feed.
+# VeryBigSad/pi-app, generate update-v1.json deterministically, publish the feed.
 #
 # Secrets:
 # - Environment "android-release": PIMOBILE_KEYSTORE_BASE64 + key passwords (local-signing path).
@@ -9,7 +9,7 @@ name: Android Release
 #   app-release-signed artifact was produced by local signing (sign locally, then upload the APK
 #   as an artifact via `gh run upload` / actions/upload-artifact in a prior run).
 # - secrets.RELEASE_PUBLISH_TOKEN: fine-grained PAT (NOT GITHUB_TOKEN) scoped to repositories
-#   VeryBigSad/pi-app-releases and VeryBigSad/verybigsad.github.io with contents:write — required
+#   VeryBigSad/pi-app and VeryBigSad/verybigsad.github.io with contents:write — required
 #   for cross-repo release upload and feed push.
 on:
   workflow_dispatch:
@@ -117,7 +117,7 @@ jobs:
       - name: Publish mirror release (anonymous APK download)
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
-          GH_REPO: VeryBigSad/pi-app-releases
+          GH_REPO: VeryBigSad/pi-app
         run: |
           if gh release view "${{ inputs.tag }}" --repo "$GH_REPO" >/dev/null 2>&1; then
             gh release upload "${{ inputs.tag }}" "$APK_PATH#app-release.apk" --repo "$GH_REPO" --clobber
@@ -128,7 +128,7 @@ jobs:
 
       - name: Verify anonymous download
         run: |
-          url="https://github.com/VeryBigSad/pi-app-releases/releases/download/${{ inputs.tag }}/app-release.apk"
+          url="https://github.com/VeryBigSad/pi-app/releases/download/${{ inputs.tag }}/app-release.apk"
           code=$(curl -sSL -o "$RUNNER_TEMP/mirror.apk" -w '%{http_code}' "$url")
           test "$code" = "200" || { echo "anonymous download HTTP $code"; exit 1; }
           cmp -s "$RUNNER_TEMP/mirror.apk" "$APK_PATH" || { echo "mirror bytes differ"; exit 1; }

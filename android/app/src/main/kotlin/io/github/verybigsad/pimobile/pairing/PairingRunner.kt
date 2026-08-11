@@ -1,12 +1,18 @@
 package io.github.verybigsad.pimobile.pairing
 
 import io.github.verybigsad.pimobile.network.DuplexByteChannel
+import io.github.verybigsad.pimobile.network.InMemoryInvitationConsumption
+import io.github.verybigsad.pimobile.network.InvitationConsumption
+import io.github.verybigsad.pimobile.network.NetworkError
 import io.github.verybigsad.pimobile.network.NetworkException
 import io.github.verybigsad.pimobile.network.PathAttempt
 import io.github.verybigsad.pimobile.network.PathConnection
 import io.github.verybigsad.pimobile.network.PathRaceCoordinator
 import io.github.verybigsad.pimobile.network.PimbStreamTransport
+import io.github.verybigsad.pimobile.network.RelayPairingPath
+import io.github.verybigsad.pimobile.network.RelayPairingRendezvous
 import io.github.verybigsad.pimobile.network.TransportPathKind
+import io.github.verybigsad.pimobile.network.asRelayProofSigner
 import io.github.verybigsad.pimobile.protocol.FrameKind
 import io.github.verybigsad.pimobile.security.DeviceKeys
 import io.github.verybigsad.pimobile.security.MacIdentityDeriver
@@ -45,6 +51,16 @@ sealed interface PairingProgressEvent {
     data class Failed(val code: String) : PairingProgressEvent
 }
 
+/** Maps relay-path transport errors to typed PAIRING_RELAY_* failure codes. */
+private fun relayFailureCode(error: NetworkException): String = when (error.code) {
+    NetworkError.RELAY_PAIRING_CONFLICT -> "PAIRING_RELAY_CONFLICT"
+    NetworkError.RELAY_PAIRING_RATE_LIMITED -> "PAIRING_RELAY_RATE_LIMITED"
+    NetworkError.RELAY_PAIRING_UNAVAILABLE -> "PAIRING_RELAY_UNAVAILABLE"
+    NetworkError.RELAY_PAIRING_NOT_READY -> "PAIRING_RELAY_REPLY_TIMEOUT"
+    NetworkError.RELAY_PAIRING_FAILED -> "PAIRING_RELAY_FAILED"
+    else -> "PAIRING_RELAY_${error.code.name}"
+}
+
 fun interface PairingPasskeyPort {
     /**
      * Runs a Credential Manager ceremony bound to the current foreground Activity.
@@ -59,8 +75,10 @@ fun interface PairingPasskeyPort {
  * pair.begin -> auth.*.options -> passkey -> auth.*.response -> auth.result -> pair.csr
  * -> pair.confirm (short code display) -> pair.result -> certificate install + profile.
  *
- * Adapter gaps: relay-rendezvous provisional pairing is not attempted (the relay pairing
- * HTTP exchange is unsettled, plan unresolved Q2); direct candidates only.
+ * Paths raced: direct provisional-TLS candidates and the relay rendezvous
+ * (relay/internal/pairing one-shot exchange + relay-spliced device-data tunnel carrying
+ * the inner provisional TLS session). The ceremony, short-code confirmation surface,
+ * invitation consumption, and expiry handling are identical on both paths.
  */
 class PairingRunner(
     private val invitation: PairingInvitation,
@@ -68,45 +86,83 @@ class PairingRunner(
     private val deviceId: String,
     private val passkey: PairingPasskeyPort,
     private val onEvent: (PairingProgressEvent) -> Unit,
+    private val relayPairingPath: RelayPairingPath = RelayPairingPath(),
+    private val consumption: InvitationConsumption = sharedInvitationConsumption,
 ) {
+    private val relayFailure = AtomicReference<NetworkException?>(null)
+
     suspend fun run() {
         try {
             onEvent(PairingProgressEvent.Connecting)
-            if (invitation.directCandidates.isEmpty()) {
-                onEvent(PairingProgressEvent.Failed("PAIRING_NO_DIRECT_PATH"))
-                return
-            }
             val keys = deviceKeys.getOrCreate(deviceId)
             val csrSha256 = MacIdentityDeriver.sha256Hex(keys.csrDer)
             val routeKeyId = "device-route-$deviceId"
             val routePublicKey = Base64.getUrlEncoder().withoutPadding().encodeToString(keys.routePublicKeySpki)
 
+            val rendezvous = try {
+                RelayPairingRendezvous.fromInvitation(invitation)
+            } catch (error: NetworkException) {
+                relayFailure.compareAndSet(null, error)
+                null
+            }
+            if (invitation.directCandidates.isEmpty() && rendezvous == null) {
+                onEvent(PairingProgressEvent.Failed("PAIRING_NO_DIRECT_PATH"))
+                return
+            }
+
             val learnedMacId = AtomicReference<String?>(null)
             val race = PathRaceCoordinator()
-            val connection = try {
-                race.connect(
-                    invitation.directCandidates.map { candidate ->
-                        PathAttempt { generation ->
-                            val (channel, peer) = ProvisionalTls.connect(
-                                candidate.host,
-                                candidate.port,
-                                invitation.serverCertificateFingerprint.bytes(),
-                            )
-                            object : PathConnection {
-                                override val kind: TransportPathKind = TransportPathKind.DIRECT
-                                override val generation: Long = generation
-                                override val channel: DuplexByteChannel = channel
-                                override suspend fun authenticate() {
-                                    learnedMacId.compareAndSet(null, peer.macId)
-                                }
-
-                                override suspend fun close() = channel.close()
-                            }
+            val attempts = invitation.directCandidates.map { candidate ->
+                PathAttempt { generation ->
+                    val (channel, peer) = ProvisionalTls.connect(
+                        candidate.host,
+                        candidate.port,
+                        invitation.serverCertificateFingerprint.bytes(),
+                    )
+                    object : PathConnection {
+                        override val kind: TransportPathKind = TransportPathKind.DIRECT
+                        override val generation: Long = generation
+                        override val channel: DuplexByteChannel = channel
+                        override suspend fun authenticate() {
+                            learnedMacId.compareAndSet(null, peer.macId)
                         }
-                    },
-                )
+
+                        override suspend fun close() = channel.close()
+                    }
+                }
+            } + listOfNotNull(
+                rendezvous?.let { active ->
+                    PathAttempt { generation ->
+                        val established = try {
+                            relayPairingPath.connect(
+                                invitation,
+                                active,
+                                routeKeyId,
+                                routePublicKey,
+                                deviceKeys.routePayloadSigner().asRelayProofSigner(),
+                                invitation.expiresAt,
+                            )
+                        } catch (error: NetworkException) {
+                            relayFailure.compareAndSet(null, error)
+                            throw error
+                        }
+                        object : PathConnection {
+                            override val kind: TransportPathKind = TransportPathKind.RELAY
+                            override val generation: Long = generation
+                            override val channel: DuplexByteChannel = established.channel
+                            override suspend fun authenticate() {
+                                learnedMacId.compareAndSet(null, established.macId)
+                            }
+
+                            override suspend fun close() = established.channel.close()
+                        }
+                    }
+                },
+            )
+            val connection = try {
+                race.connect(attempts)
             } catch (error: NetworkException) {
-                onEvent(PairingProgressEvent.Failed("PAIRING_CONNECT_${error.code.name}"))
+                onEvent(PairingProgressEvent.Failed(connectFailureCode(error)))
                 return
             }
 
@@ -169,6 +225,9 @@ class PairingRunner(
 
         onEvent(PairingProgressEvent.AwaitingConfirmation(null))
         onEvent(PairingProgressEvent.IssuingCertificate)
+        if (!consumption.tryConsume(invitation.invitationId, invitation.expiresAt)) {
+            fail("PAIRING_INVITATION_REPLAYED")
+        }
         transport.send(
             FrameKind.Json,
             WireMessages.encode(
@@ -283,5 +342,17 @@ class PairingRunner(
         throw PairingFailed(code)
     }
 
+    /** Typed relay failure codes (PAIRING_RELAY_*) win when every raced path failed. */
+    private fun connectFailureCode(error: NetworkException): String {
+        val relay = relayFailure.get()
+        if (relay != null) return relayFailureCode(relay)
+        return "PAIRING_CONNECT_${error.code.name}"
+    }
+
     private class PairingFailed(val code: String) : Exception(code)
+
+    companion object {
+        /** Process-wide one-shot invitation consumption guard shared by both pairing paths. */
+        val sharedInvitationConsumption: InvitationConsumption = InMemoryInvitationConsumption()
+    }
 }

@@ -119,6 +119,7 @@ jobs:
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
           CERTIFICATE_IDENTITY: ${{ github.server_url }}/${{ github.repository }}/.github/workflows/relay-image.yml@${{ github.ref }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cosign verify \
             --certificate-identity "$CERTIFICATE_IDENTITY" \
@@ -154,8 +155,12 @@ jobs:
           set -euo pipefail
           docker image rm "$IMAGE@$DIGEST" >/dev/null 2>&1 || true
           if ! docker pull "$IMAGE:$RELEASE_TAG"; then
-            printf '::error::GHCR package is not anonymously pullable; make the container package public, then rerun this workflow. Do not add a registry token to Terraform or cloud-init.\n'
-            exit 1
+            # Runtime pulls use the private YC Container Registry; GHCR is public provenance
+            # only. Warn instead of failing while the GHCR package is private.
+            printf '::warning::GHCR package is not anonymously pullable; provenance pull unavailable until the package is public.\n'
+            docker login ghcr.io -u "$GITHUB_ACTOR" --password "$GHCR_TOKEN" >/dev/null
+            docker pull "$IMAGE:$RELEASE_TAG"
+            docker logout ghcr.io >/dev/null
           fi
           test "$(docker image inspect --format '{{.RepoDigests}}' "$IMAGE:$RELEASE_TAG")" = "[$IMAGE@$DIGEST]"
           cosign verify \

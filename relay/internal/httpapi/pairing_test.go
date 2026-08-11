@@ -24,9 +24,14 @@ func TestProvisionalPairingOneShotExchange(t *testing.T) {
 	if status != http.StatusCreated || handle.PairingID == "" || handle.Secret == "" || handle.ExpiresAt == "" {
 		t.Fatalf("pairing open = %d, %#v", status, handle)
 	}
-	if status, _ := openPairingOK(t, handler, privateKey); status != http.StatusConflict {
-		t.Fatalf("second pairing status = %d", status)
+	secondStatus, second := openPairingOK(t, handler, privateKey)
+	if secondStatus != http.StatusCreated || second.PairingID == "" || second.PairingID == handle.PairingID {
+		t.Fatalf("rotation pairing status = %d, %#v", secondStatus, second)
 	}
+	if status, _ := getPairingRequest(t, handler, privateKey, handle.PairingID); status != http.StatusNotFound {
+		t.Fatalf("rotated-away exchange status = %d", status)
+	}
+	handle = second
 	if status := postPairingReply(t, handler, privateKey, handle.PairingID, "cert-bytes"); status != http.StatusNotFound {
 		t.Fatalf("reply before request status = %d", status)
 	}

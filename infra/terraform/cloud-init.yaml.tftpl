@@ -445,7 +445,9 @@ write_files:
         rollback
         exit 0
       fi
-      [ -f "$next_file" ] || fail "$next_file missing; stage updates with: pimobile-update stage RELAY_IMAGE=<ref> [CADDY_IMAGE=<ref>] [NTFY_IMAGE=<ref>]"
+      if [ "$${1:-}" != "stage" ] && [ ! -f "$next_file" ]; then
+        fail "$next_file missing; stage updates with: pimobile-update stage RELAY_IMAGE=<ref> [CADDY_IMAGE=<ref>] [NTFY_IMAGE=<ref>]"
+      fi
       if [ "$${1:-}" = "stage" ]; then
         shift
         [ "$#" -ge 1 ] || fail "stage requires at least one KEY=VALUE update"

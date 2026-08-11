@@ -85,6 +85,8 @@ class PairingInvitation private constructor(
             envelope.requireExactKeys(setOf("signed", "signature"))
             val signed = envelope.requireObject("signed")
             signed.requireExactKeys(
+                optional = setOf("relayPairing"),
+                required =
                 setOf(
                     "version",
                     "relayUrl",

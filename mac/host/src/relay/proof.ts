@@ -295,7 +295,10 @@ function parseExpiry(value: string, nowMs: number, maximumLifetimeMs: number, ki
     throw new RelayError(kind === "notice" ? "RELAY_BAD_NOTICE" : "RELAY_BAD_PROOF", `${kind} expiry is invalid`);
   }
   const expiresAtMs = Date.parse(value);
-  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= nowMs || expiresAtMs - nowMs > maximumLifetimeMs) {
+  // Server-issued challenges/notices get skew+latency leeway on the upper bound;
+  // the lower bound (already expired) stays strict.
+  const skewAllowanceMs = 2_000;
+  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= nowMs || expiresAtMs - nowMs > maximumLifetimeMs + skewAllowanceMs) {
     throw new RelayError(kind === "notice" ? "RELAY_BAD_NOTICE" : "RELAY_BAD_PROOF", `${kind} expiry is outside bounds`);
   }
   return expiresAtMs;

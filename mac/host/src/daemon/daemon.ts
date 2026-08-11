@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { logError } from "./log.js";
 import { networkInterfaces } from "node:os";
 import { constants } from "node:fs";
 import { open, readFile, unlink } from "node:fs/promises";
@@ -253,7 +254,7 @@ export class HostDaemon {
         secrets,
         onTunnel: (tunnel, notice) => this.onRelayTunnel(tunnel, notice),
         onPairingRequest: (pairingId) => {
-          void this.handleRelayPairingRequest(pairingId).catch(() => undefined);
+          void this.handleRelayPairingRequest(pairingId).catch((error: unknown) => logError("pairing", "relay pairing request", error));
         },
         registeredRouteId: () => this.store?.relayRegistration()?.routeId,
         onRegistered: (routeId) => {
@@ -404,7 +405,10 @@ export class HostDaemon {
   private async registerDeviceRouteKey(routeKeyId: string | undefined, publicKey: string | undefined): Promise<void> {
     if (routeKeyId === undefined || publicKey === undefined || this.relayManager === undefined) return;
     const spki = Buffer.from(publicKey, "base64url");
-    await this.relayManager.admin().addDeviceKey(routeKeyId, new Uint8Array(spki)).catch(() => undefined);
+    await this.relayManager
+      .admin()
+      .addDeviceKey(routeKeyId, new Uint8Array(spki))
+      .catch((error: unknown) => logError("relay", "device key registration", error));
   }
 
   private async handleAdmin(method: string, params: Record<string, unknown>): Promise<unknown> {
@@ -455,7 +459,8 @@ export class HostDaemon {
     try {
       const exchange = await relayManager.pairing().openExchange();
       relayPairing = { pairingId: exchange.pairingId, secret: exchange.secret, expiresAt: exchange.expiresAt };
-    } catch {
+    } catch (error) {
+      logError("pairing", "relay exchange open", error);
       relayPairing = undefined;
     }
     const payload: PairingInvitationPayload = {

@@ -36,7 +36,7 @@ describe("buildMetadata", () => {
     expect(metadata.schemaVersion).toBe(1);
     expect(metadata.packageName).toBe("io.github.verybigsad.pimobile");
     expect(metadata.apk.url).toBe(
-      "https://github.com/VeryBigSad/pi-app-releases/releases/download/v0.2.0/app-release.apk",
+      "https://github.com/VeryBigSad/pi-app/releases/download/v0.2.0/app-release.apk",
     );
     expect(metadata.apk.certificateSha256).toBe(PIN);
   });

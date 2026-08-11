@@ -1,12 +1,24 @@
-# Folder network quota is 1, so the shared default network is reused.
+# Reuse an existing network when network_name is set (folder quota may allow
+# only one); otherwise create a dedicated one.
 data "yandex_vpc_network" "pi_mobile" {
-  name = var.network_name
+  count = var.network_name == "" ? 0 : 1
+  name  = var.network_name
+}
+
+resource "yandex_vpc_network" "pi_mobile" {
+  count  = var.network_name == "" ? 1 : 0
+  name   = "pi-mobile"
+  labels = var.labels
+}
+
+locals {
+  network_id = var.network_name == "" ? yandex_vpc_network.pi_mobile[0].id : data.yandex_vpc_network.pi_mobile[0].id
 }
 
 resource "yandex_vpc_subnet" "pi_mobile" {
   name           = "pi-mobile"
   zone           = var.zone
-  network_id     = data.yandex_vpc_network.pi_mobile.id
+  network_id     = local.network_id
   v4_cidr_blocks = ["10.91.0.0/28"]
   labels         = var.labels
 }
@@ -21,7 +33,7 @@ resource "yandex_vpc_address" "pi_mobile" {
 
 resource "yandex_vpc_security_group" "pi_mobile" {
   name       = "pi-mobile"
-  network_id = data.yandex_vpc_network.pi_mobile.id
+  network_id = local.network_id
   labels     = var.labels
 
   ingress {

@@ -16,7 +16,7 @@ import { resolve } from "node:path";
 export const PIN = "CC:36:66:F3:77:CE:4C:2B:D6:CE:19:A4:7F:3A:BE:47:19:AC:04:0F:D6:4F:FB:11:9F:02:E9:AC:4B:DD:D4:FE";
 export const PACKAGE_NAME = "io.github.verybigsad.pimobile";
 export const METADATA_MAX_BYTES = 16 * 1024;
-export const RELEASES_REPO = "VeryBigSad/pi-app-releases";
+export const RELEASES_REPO = "VeryBigSad/pi-app";
 
 const SHA256_HEX = /^[0-9a-f]{64}$/u;
 const SHA256_COLON = /^([0-9A-F]{2}:){31}[0-9A-F]{2}$/u;

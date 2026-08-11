@@ -134,7 +134,7 @@ describe("relay P-256 proofs", () => {
     expect(() => parseControlChallenge(Buffer.alloc((16 << 10) + 1), false, NOW)).toThrow(/bounds/);
     expect(parseControlChallenge(JSON.stringify({ type: "route.challenge", signed: signed(), extra: true }), false, NOW)).toEqual(signed());
     expect(() => parseControlChallenge(JSON.stringify({ type: "route.challenge", signed: signed({ nonce: "x" }) }), false, NOW)).toThrow(/nonce/);
-    expect(() => parseControlChallenge(JSON.stringify({ type: "route.challenge", signed: signed({ expiresAt: new Date(NOW + 30_001).toISOString() }) }), false, NOW)).toThrow(/expiry/);
+    expect(() => parseControlChallenge(JSON.stringify({ type: "route.challenge", signed: signed({ expiresAt: new Date(NOW + 32_001).toISOString() }) }), false, NOW)).toThrow(/expiry/);
   });
 
   it("accepts current Go and schema control-ready shapes but rejects wrong bindings", () => {
@@ -153,7 +153,7 @@ describe("relay P-256 proofs", () => {
     };
     expect(parseRouteNotice(JSON.stringify(notice), false, NOW)).toMatchObject({ ...notice, expiresAtMs: NOW + 20_000 });
     expect(() => parseRouteNotice(JSON.stringify({ ...notice, mode: "other" }), false, NOW)).toThrow(/mode/);
-    expect(() => parseRouteNotice(JSON.stringify({ ...notice, expiresAt: new Date(NOW + 20_001).toISOString() }), false, NOW)).toThrow(/expiry/);
+    expect(() => parseRouteNotice(JSON.stringify({ ...notice, expiresAt: new Date(NOW + 22_001).toISOString() }), false, NOW)).toThrow(/expiry/);
     expect(parseRouteNotice(JSON.stringify({ ...notice, additive: true }), false, NOW)).toMatchObject({ rendezvousId: "rv-1" });
   });
 });

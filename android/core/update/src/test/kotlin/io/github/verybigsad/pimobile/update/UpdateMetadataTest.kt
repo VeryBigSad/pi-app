@@ -15,9 +15,9 @@ class UpdateMetadataTest {
           "versionCode": 2,
           "versionName": "0.2.0",
           "publishedAt": "2026-08-11T00:00:00Z",
-          "releasePageUrl": "https://github.com/VeryBigSad/pi-app-releases/releases/tag/v0.2.0",
+          "releasePageUrl": "https://github.com/VeryBigSad/pi-app/releases/tag/v0.2.0",
           "apk": {
-            "url": "https://github.com/VeryBigSad/pi-app-releases/releases/download/v0.2.0/app-release.apk",
+            "url": "https://github.com/VeryBigSad/pi-app/releases/download/v0.2.0/app-release.apk",
             "sizeBytes": 12345678,
             "sha256": "$sha",
             "certificateSha256": "$pin"
@@ -79,7 +79,7 @@ class UpdateMetadataTest {
 
     @Test
     fun rejectsHttpApkUrl() {
-        val tampered = validJson().replace("https://github.com/VeryBigSad/pi-app-releases/releases/download", "http://github.com/x")
+        val tampered = validJson().replace("https://github.com/VeryBigSad/pi-app/releases/download", "http://github.com/x")
         val error = runCatching {
             UpdateMetadataParser.parse(tampered.encodeToByteArray(), pinnedCertificateSha256 = pin)
         }.exceptionOrNull()

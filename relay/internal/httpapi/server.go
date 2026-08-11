@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -229,6 +230,9 @@ func (s *Server) openPairing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	handle, err := s.pairing.Open(routeID)
+	if err == pairing.ErrBusy {
+		handle, err = s.pairing.Rotate(routeID)
+	}
 	if err != nil {
 		writeError(w, pairingStatus(err), "pairing_failed")
 		return
@@ -453,6 +457,7 @@ func (s *Server) authenticateHTTP(r *http.Request, audiences ...string) (string,
 	raw := []byte(r.Header.Get("X-Relay-Proof"))
 	proof, err := auth.ParseProof(raw)
 	if err != nil {
+		s.logAuthFailure(r, "parse", err)
 		return "", auth.Proof{}, err
 	}
 	matchedAudience := false
@@ -467,19 +472,27 @@ func (s *Server) authenticateHTTP(r *http.Request, audiences ...string) (string,
 	}
 	key, err := s.registry.Lookup(proof.Signed.RouteID, proof.Signed.KeyID)
 	if err != nil {
+		s.logAuthFailure(r, "lookup", err)
 		return "", auth.Proof{}, err
 	}
 	if key.Role != roleForAudience(proof.Signed.Audience) {
+		s.logAuthFailure(r, "role", auth.ErrAudience)
 		return "", auth.Proof{}, auth.ErrAudience
 	}
 	publicKey, err := auth.ParseP256SPKI(key.SPKIDER)
 	if err != nil {
+		s.logAuthFailure(r, "spki", err)
 		return "", auth.Proof{}, err
 	}
 	if err := s.replays.Verify(proof, publicKey, proof.Signed.Audience); err != nil {
+		s.logAuthFailure(r, "verify", err)
 		return "", auth.Proof{}, err
 	}
 	return proof.Signed.RouteID, proof, nil
+}
+
+func (s *Server) logAuthFailure(r *http.Request, stage string, err error) {
+	log.Printf("auth failure path=%s stage=%s error=%v", r.URL.Path, stage, err)
 }
 
 func roleForAudience(audience string) registry.Role {

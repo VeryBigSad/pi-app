@@ -87,7 +87,7 @@ No `terraform apply` has been run; there is no cloud evidence.
 | `dal.yml` | scheduled live DAL verification. |
 | `relay-image.yml` | relay image build/verify/publish with cosign keyless signature (identity pinned in cloud-init cosign policy). |
 | `secret-scan.yml` | gitleaks. |
-| `android-release.yml` | manual `workflow_dispatch`: build/verify signed APK, mirror to `VeryBigSad/pi-app-releases`, regenerate `update-v1.json`, commit to Pages repo. |
+| `android-release.yml` | manual `workflow_dispatch`: build/verify signed APK, mirror to `VeryBigSad/pi-app`, regenerate `update-v1.json`, commit to Pages repo. |
 
 ## Layers
 

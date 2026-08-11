@@ -1,4 +1,5 @@
 import { createHash, createPrivateKey } from "node:crypto";
+import { logError } from "./log.js";
 import { createServer, type Server, type TLSSocket } from "node:tls";
 import { X509Certificate } from "@peculiar/x509";
 import type { HostGateway } from "../gateway/types.js";
@@ -167,9 +168,12 @@ export class DirectTlsListeners {
     const server = createServer(tlsOptions, (socket) => {
       this.sockets.add(socket);
       socket.once("close", () => this.sockets.delete(socket));
-      void admitTlsSocket(socket, { ...this.options, path: "direct" }, provisional).catch(() => socket.destroy());
+      void admitTlsSocket(socket, { ...this.options, path: "direct" }, provisional).catch((error: unknown) => {
+        logError("direct-tls", provisional ? "provisional admission" : "mutual admission", error);
+        socket.destroy();
+      });
     });
-    server.on("tlsClientError", () => undefined);
+    server.on("tlsClientError", (error) => logError("direct-tls", "client handshake", error));
     return new Promise<Server>((resolveListen, rejectListen) => {
       server.once("error", rejectListen);
       server.listen(port, () => {
