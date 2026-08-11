@@ -27,7 +27,13 @@ describe("renderLaunchdPlist", () => {
     expect(plist).toContain(join(root, "logs", "daemon.out.log"));
     const plistPath = join(root, "agent.plist");
     await writeFile(plistPath, plist);
-    expect(execFileSync("plutil", ["-lint", plistPath], { encoding: "utf8" })).toContain("OK");
+    if (process.platform === "darwin") {
+      expect(execFileSync("plutil", ["-lint", plistPath], { encoding: "utf8" })).toContain("OK");
+    } else {
+      // plutil is macOS-only; on CI Linux fall back to structural checks.
+      expect(plist.trim().startsWith("<?xml")).toBe(true);
+      expect(plist.trim().endsWith("</plist>")).toBe(true);
+    }
   });
 
   it("escapes XML special characters in paths", () => {
