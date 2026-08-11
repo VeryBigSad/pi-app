@@ -1,0 +1,14 @@
+title = "pi-mobile gitleaks config"
+
+# All current findings are intentional test vectors, hash manifests, or protocol constants.
+[allowlist]
+description = "test fixtures, hash manifests, protocol constants"
+paths = [
+  '''^mac/pi-patch/manifest/''',
+  '''^protocol/fixtures/''',
+  '''^mac/host/test/''',
+  '''^android/.*/src/test/resources/pki/''',
+  '''^android/.*/src/androidTest/resources/pki/''',
+  '''^android/.*/src/test/''',
+  '''^android/core/security/src/main/kotlin/io/github/verybigsad/pimobile/security/PasskeyPolicy.kt$''',
+]
