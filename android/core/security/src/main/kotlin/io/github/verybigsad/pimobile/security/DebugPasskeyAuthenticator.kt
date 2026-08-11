@@ -1,26 +1,50 @@
 package io.github.verybigsad.pimobile.security
 
+import android.content.Context
+import java.security.KeyFactory
 import java.security.KeyPair
 import java.security.KeyPairGenerator
+import java.security.KeyStore
 import java.security.MessageDigest
 import java.security.PrivateKey
 import java.security.SecureRandom
 import java.security.Signature
 import java.security.interfaces.ECPublicKey
 import java.security.spec.ECGenParameterSpec
-import java.util.UUID
+import java.security.spec.PKCS8EncodedKeySpec
+import java.security.spec.X509EncodedKeySpec
+
+/** Android Keystore alias prefix for debug passkey signing keys; the credential id (base64url) is appended. */
+internal const val DebugPasskeyKeyAliasPrefix = "pimobile-debug-passkey-"
 
 /**
  * Debug-only local passkey authenticator. Performs real WebAuthn ceremonies (P-256 keys,
  * structurally valid attestation/assertion responses, genuine ECDSA signatures) without a
  * platform passkey provider, so the pairing ceremony is completable on emulators with an
  * old Play services. Every public entry point refuses to run in release builds, and the
- * produced responses still pass the full [PasskeyPolicy] validation. Credentials live in
- * process memory only.
+ * produced responses still pass the full [PasskeyPolicy] validation.
+ *
+ * Credentials are durable: signing keys live in Android Keystore and identity/counter
+ * records are atomically written under noBackupFilesDir, so assertions keep working after
+ * process death. When no application context is reachable (plain JVM unit tests) the store
+ * degrades to process memory.
  */
-class DebugPasskeyAuthenticator(private val originProvider: () -> String) : PasskeyExecutor {
+class DebugPasskeyAuthenticator(
+    store: DebugPasskeyCredentialStore? = null,
+    private val originProvider: () -> String,
+) : PasskeyExecutor {
+    constructor(context: Context, originProvider: () -> String) : this(
+        AndroidDebugPasskeyCredentialStore(context.applicationContext),
+        originProvider,
+    )
+
     private val random = SecureRandom()
+    private val store = store ?: defaultStore()
     private val credentials = mutableMapOf<String, StoredCredential>()
+
+    init {
+        loadPersistedCredentials()
+    }
 
     private class StoredCredential(
         val id: ByteArray,
@@ -37,20 +61,23 @@ class DebugPasskeyAuthenticator(private val originProvider: () -> String) : Pass
         val challenge = options.requireString("challenge", 1024)
         val user = options.requireObject("user")
         val userHandle = Base64Url.decode(user.requireString("id", 1024), maxBytes = 128)
-        val keyPair = generateKeyPair()
         val credentialId = ByteArray(32).also(random::nextBytes)
         val credentialIdBase64Url = Base64Url.encode(credentialId)
+        val keyAlias = DebugPasskeyKeyAliasPrefix + credentialIdBase64Url
+        val keyPair = generateKeyPair(keyAlias)
         val publicKey = keyPair.public as ECPublicKey
+        val credential = StoredCredential(
+            credentialId,
+            credentialIdBase64Url,
+            keyPair.private,
+            publicKey,
+            userHandle,
+            signCount = 0,
+        )
         synchronized(credentials) {
-            credentials[credentialIdBase64Url] = StoredCredential(
-                credentialId,
-                credentialIdBase64Url,
-                keyPair.private,
-                publicKey,
-                userHandle,
-                signCount = 0,
-            )
+            credentials[credentialIdBase64Url] = credential
         }
+        persist(credential, keyAlias)
         val authData = registrationAuthData(credentialId, publicKey)
         val clientData = clientDataJson(PasskeyCeremonyType.REGISTRATION.clientDataType, challenge)
         val attestationObject = Cbor.map(
@@ -74,6 +101,7 @@ class DebugPasskeyAuthenticator(private val originProvider: () -> String) : Pass
         val credential = selectCredential(options)
             ?: throw NoSuchElementException("no debug passkey credential matches the request")
         val signCount = synchronized(credentials) { ++credential.signCount }
+        runCatching { store.updateSignCount(credential.idBase64Url, signCount) }
         val authData = assertionAuthData(signCount)
         val clientData = clientDataJson(PasskeyCeremonyType.ASSERTION.clientDataType, challenge)
         val signature = sign(credential.privateKey, authData + sha256(clientData))
@@ -109,12 +137,12 @@ class DebugPasskeyAuthenticator(private val originProvider: () -> String) : Pass
         }
     }
 
-    private fun generateKeyPair(): KeyPair {
+    private fun generateKeyPair(keyAlias: String): KeyPair {
         val hardwareBacked = runCatching {
             val generator = KeyPairGenerator.getInstance("EC", "AndroidKeyStore")
             generator.initialize(
                 android.security.keystore.KeyGenParameterSpec.Builder(
-                    "pimobile-debug-passkey-${UUID.randomUUID()}",
+                    keyAlias,
                     android.security.keystore.KeyProperties.PURPOSE_SIGN,
                 )
                     .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
@@ -128,6 +156,59 @@ class DebugPasskeyAuthenticator(private val originProvider: () -> String) : Pass
             generator.initialize(ECGenParameterSpec("secp256r1"))
             generator.generateKeyPair()
         }
+    }
+
+    private fun persist(credential: StoredCredential, keyAlias: String) {
+        val hardwareBacked = credential.privateKey.encoded == null
+        val record = DebugPasskeyCredentialRecord(
+            credentialIdBase64Url = credential.idBase64Url,
+            keyAlias = keyAlias.takeIf { hardwareBacked },
+            userHandleBase64Url = Base64Url.encode(credential.userHandle),
+            signCount = credential.signCount,
+            softwarePrivateKeyBase64Url = if (hardwareBacked) null else Base64Url.encode(credential.privateKey.encoded),
+            softwarePublicKeyBase64Url = if (hardwareBacked) null else Base64Url.encode(credential.publicKey.encoded),
+        )
+        store.put(record)
+    }
+
+    private fun loadPersistedCredentials() {
+        val records = runCatching { store.load() }.getOrDefault(emptyList())
+        val keyStore = runCatching { androidKeyStore() }.getOrNull()
+        records.forEach { record ->
+            val keys = restoreKeys(record, keyStore) ?: return@forEach
+            synchronized(credentials) {
+                credentials[record.credentialIdBase64Url] = StoredCredential(
+                    id = Base64Url.decode(record.credentialIdBase64Url, 128),
+                    idBase64Url = record.credentialIdBase64Url,
+                    privateKey = keys.first,
+                    publicKey = keys.second,
+                    userHandle = Base64Url.decode(record.userHandleBase64Url, 128),
+                    signCount = record.signCount,
+                )
+            }
+        }
+    }
+
+    private fun restoreKeys(
+        record: DebugPasskeyCredentialRecord,
+        keyStore: KeyStore?,
+    ): Pair<PrivateKey, ECPublicKey>? {
+        val alias = record.keyAlias
+        if (alias != null && keyStore != null) {
+            runCatching {
+                val entry = keyStore.getEntry(alias, null) as? KeyStore.PrivateKeyEntry ?: return@runCatching null
+                val publicKey = entry.certificate.publicKey as? ECPublicKey ?: return@runCatching null
+                entry.privateKey to publicKey
+            }.getOrNull()?.let { return it }
+        }
+        val privateEncoded = record.softwarePrivateKeyBase64Url ?: return null
+        val publicEncoded = record.softwarePublicKeyBase64Url ?: return null
+        return runCatching {
+            val factory = KeyFactory.getInstance("EC")
+            val privateKey = factory.generatePrivate(PKCS8EncodedKeySpec(Base64Url.decode(privateEncoded, 256)))
+            val publicKey = factory.generatePublic(X509EncodedKeySpec(Base64Url.decode(publicEncoded, 256))) as ECPublicKey
+            privateKey to publicKey
+        }.getOrNull()
     }
 
     private fun registrationAuthData(credentialId: ByteArray, publicKey: ECPublicKey): ByteArray {
@@ -168,6 +249,19 @@ class DebugPasskeyAuthenticator(private val originProvider: () -> String) : Pass
 
     private companion object {
         private const val MaxOptionsBytes = 64 * 1024
+
+        /**
+         * Resolves the durable store without an explicit [Context] so existing debug wiring
+         * keeps working; falls back to process memory off-device (plain JVM unit tests).
+         */
+        private fun defaultStore(): DebugPasskeyCredentialStore {
+            val context = runCatching {
+                val appGlobals = Class.forName("android.app.AppGlobals")
+                appGlobals.getMethod("getInitialApplication").invoke(null) as? Context
+            }.getOrNull()
+            return context?.let { AndroidDebugPasskeyCredentialStore(it.applicationContext) }
+                ?: InMemoryDebugPasskeyCredentialStore()
+        }
         private const val FLAG_UP_I = 0x01
         private const val FLAG_UV_I = 0x04
         private const val FLAG_AT_I = 0x40
