@@ -67,7 +67,9 @@ export async function signPairingInvitation(
 }
 
 export function encodePairingInvitationUri(invitation: SignedPairingInvitation): string {
-  const raw = Buffer.from(JSON.stringify(invitation), "utf8");
+  // The envelope must be JCS-canonical: Android verifies the decoded bytes
+  // against their own canonicalization (key order signature < signed).
+  const raw = Buffer.from(canonicalizeJson(invitation as unknown as JsonObject), "utf8");
   if (raw.byteLength > 2 * PAIRING_INVITATION_MAX_JSON_BYTES) {
     throw new SecurityError("SECURITY_INVALID_INPUT", "pairing invitation exceeds size bounds");
   }
