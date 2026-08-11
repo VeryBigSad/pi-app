@@ -17,6 +17,7 @@ jobs:
           node-version: 22.23.2
           cache: npm
       - run: npm ci
+      - run: npm run build
       - run: npm run check
       - run: npm run terminal:verify
       - run: npm run fixtures:verify
@@ -52,7 +53,8 @@ jobs:
           target: google_apis
           arch: x86_64
           disable-animations: true
-          script: ./gradlew --no-daemon :android:app:connectedDebugAndroidTest :android:core:security:connectedDebugAndroidTest :android:core:storage:connectedDebugAndroidTest :android:core:network:connectedDebugAndroidTest :android:core:push:connectedDebugAndroidTest :android:core:voice:connectedDebugAndroidTest :android:core:update:connectedDebugAndroidTest :android:terminal:connectedDebugAndroidTest :android:feature:session:connectedDebugAndroidTest
+          emulator-boot-timeout: 600
+          script: ./gradlew --no-daemon --max-workers=2 -Porg.gradle.workers.max=2 connectedDebugAndroidTest
 
   terraform:
     runs-on: ubuntu-latest
