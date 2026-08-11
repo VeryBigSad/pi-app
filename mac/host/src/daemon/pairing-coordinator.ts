@@ -44,6 +44,7 @@ export interface PairingCoordinatorOptions {
   readonly authority: () => CertificateAuthorityMaterial;
   readonly revocations: SqliteRevocationRegistry;
   readonly now?: () => number;
+  readonly debugAndroidOrigins?: readonly string[];
   readonly onDevicePaired?: (device: { deviceId: string; deviceRouteKeyId?: string; deviceRoutePublicKey?: string }) => void;
 }
 
@@ -224,6 +225,7 @@ export class PairingCoordinator implements PairingRuntime {
     const verified = await verifyOwnerRegistration({
       response: credential as unknown as Parameters<typeof verifyOwnerRegistration>[0]["response"],
       expectedChallenge: ceremony.challenge,
+      ...(this.options.debugAndroidOrigins === undefined ? {} : { allowedOrigins: this.options.debugAndroidOrigins }),
     });
     const after = this.options.ceremonies.recordWebAuthnResult(ceremony.ceremonyId, true);
     this.pendingCeremony = after;
@@ -245,6 +247,7 @@ export class PairingCoordinator implements PairingRuntime {
       expectedChallenge: ceremony.challenge,
       credential: stored,
       revocations: this.options.revocations,
+      ...(this.options.debugAndroidOrigins === undefined ? {} : { allowedOrigins: this.options.debugAndroidOrigins }),
     });
     await this.options.store.updateOwnerCredentialCounter(stored.id, result.newCounter);
     const after = this.options.ceremonies.recordWebAuthnResult(ceremony.ceremonyId, true);

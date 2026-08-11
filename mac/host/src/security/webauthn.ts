@@ -64,17 +64,19 @@ export async function generateOwnerRegistrationOptions(input: {
 export async function verifyOwnerRegistration(input: {
   readonly response: RegistrationResponseJSON;
   readonly expectedChallenge: string;
+  readonly allowedOrigins?: readonly string[];
 }): Promise<{
   readonly credential: StoredOwnerCredential;
   readonly credentialDeviceType: "singleDevice" | "multiDevice";
   readonly credentialBackedUp: boolean;
 }> {
   validateChallenge(input.expectedChallenge);
+  const origins = normalizeAllowedOrigins(input.allowedOrigins);
   try {
     const result = await verifyRegistrationResponse({
       response: input.response,
       expectedChallenge: input.expectedChallenge,
-      expectedOrigin: ANDROID_WEBAUTHN_ORIGIN,
+      expectedOrigin: origins.length === 1 ? origins[0] : [...origins],
       expectedRPID: PASSKEY_RP_ID,
       expectedType: "webauthn.create",
       requireUserPresence: true,
@@ -84,7 +86,7 @@ export async function verifyOwnerRegistration(input: {
     if (
       !result.verified ||
       !result.registrationInfo.userVerified ||
-      result.registrationInfo.origin !== ANDROID_WEBAUTHN_ORIGIN ||
+      !origins.includes(result.registrationInfo.origin) ||
       result.registrationInfo.rpID !== PASSKEY_RP_ID
     ) {
       throw rejected();
@@ -127,8 +129,10 @@ export async function verifyOwnerAssertion(input: {
   readonly expectedChallenge: string;
   readonly credential: StoredOwnerCredential;
   readonly revocations: PasskeyRevocationChecker;
+  readonly allowedOrigins?: readonly string[];
 }): Promise<{ readonly newCounter: number }> {
   validateChallenge(input.expectedChallenge);
+  const origins = normalizeAllowedOrigins(input.allowedOrigins);
   if (input.revocations.isRevoked("passkey", input.credential.id)) {
     throw new SecurityError("SECURITY_REVOKED", "owner credential is revoked");
   }
@@ -137,7 +141,7 @@ export async function verifyOwnerAssertion(input: {
     const result = await verifyAuthenticationResponse({
       response: input.response,
       expectedChallenge: input.expectedChallenge,
-      expectedOrigin: ANDROID_WEBAUTHN_ORIGIN,
+      expectedOrigin: origins.length === 1 ? origins[0] : [...origins],
       expectedRPID: PASSKEY_RP_ID,
       expectedType: "webauthn.get",
       credential: toWebAuthnCredential(input.credential),
@@ -146,7 +150,7 @@ export async function verifyOwnerAssertion(input: {
     if (
       !result.verified ||
       !result.authenticationInfo.userVerified ||
-      result.authenticationInfo.origin !== ANDROID_WEBAUTHN_ORIGIN ||
+      !origins.includes(result.authenticationInfo.origin) ||
       result.authenticationInfo.rpID !== PASSKEY_RP_ID
     ) {
       throw rejected();
@@ -156,6 +160,29 @@ export async function verifyOwnerAssertion(input: {
     if (error instanceof SecurityError) throw error;
     throw rejected(error);
   }
+}
+
+const ANDROID_ORIGIN_PATTERN = /^android:apk-key-hash:[A-Za-z0-9_-]{1,128}$/;
+const MAX_ANDROID_ORIGINS = 8;
+
+/**
+ * Allowed WebAuthn origins. Defaults to the release-signing origin only; extra entries
+ * (debug APK signing identities for local development) must be explicitly configured
+ * via the daemon's `debugAndroidOrigins` config key.
+ */
+export function normalizeAllowedOrigins(allowedOrigins?: readonly string[]): [string, ...string[]] {
+  const extras = allowedOrigins ?? [];
+  if (extras.length > MAX_ANDROID_ORIGINS) {
+    throw new SecurityError("SECURITY_INVALID_INPUT", "Android origin allowlist is too large");
+  }
+  const origins: string[] = [ANDROID_WEBAUTHN_ORIGIN];
+  for (const origin of extras) {
+    if (!ANDROID_ORIGIN_PATTERN.test(origin) || origin === ANDROID_WEBAUTHN_ORIGIN) {
+      throw new SecurityError("SECURITY_INVALID_INPUT", "Android origin allowlist entry is invalid");
+    }
+    if (!origins.includes(origin)) origins.push(origin);
+  }
+  return origins as [string, ...string[]];
 }
 
 function validateUser(userId: Uint8Array, userName: string): void {

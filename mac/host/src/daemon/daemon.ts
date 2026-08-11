@@ -22,6 +22,7 @@ import {
   type SignedPairingInvitation,
 } from "../security/pairing-invitation.js";
 import { SqliteRevocationRegistry } from "../security/revocation-registry.js";
+import { ANDROID_WEBAUTHN_ORIGIN } from "../security/webauthn.js";
 import { createLocalTerminalBackend, type TerminalBackend } from "../terminal/backend.js";
 import { AdminServer } from "./admin-server.js";
 import { BlobStore } from "./blob-store.js";
@@ -63,6 +64,7 @@ export interface HostDaemonConfig {
   readonly ntfy?: Parameters<typeof parseNtfyConfig>[0];
   readonly groqKeyPath?: string;
   readonly passkeySessionTtlMs?: number;
+  readonly debugAndroidOrigins?: readonly string[];
 }
 
 export interface DaemonStatus {
@@ -200,11 +202,17 @@ export class HostDaemon {
       store,
       authority: () => this.requireMaterial().authority,
       revocations: this.revocations,
+      ...(this.config.debugAndroidOrigins === undefined ? {} : { debugAndroidOrigins: this.config.debugAndroidOrigins }),
       onDevicePaired: (device) => {
         void this.registerDeviceRouteKey(device.deviceRouteKeyId, device.deviceRoutePublicKey);
       },
     });
-    const authentication = new UserAuthenticationService(store, this.revocations);
+    const authentication = new UserAuthenticationService(
+      store,
+      this.revocations,
+      undefined,
+      this.config.debugAndroidOrigins,
+    );
     const blobs = new BlobStore(this.layout.blobDirectory);
     const terminal = this.terminalBackend === undefined
       ? undefined
@@ -694,6 +702,7 @@ export class HostDaemon {
       directPort: readPort(ports, "direct", 4411),
       provisionalPort: readPort(ports, "provisional", 4412),
       ...readPasskeySessionTtl(raw["passkeySessionTtlMs"]),
+      ...readDebugAndroidOrigins(raw["debugAndroidOrigins"]),
       ...(ntfy === undefined ? {} : { ntfy }),
     };
     if (relay === undefined) return config;
@@ -725,6 +734,29 @@ function readPasskeySessionTtl(value: unknown): { passkeySessionTtlMs?: number }
     throw new SecurityError("SECURITY_INVALID_INPUT", "passkeySessionTtlMs config is invalid");
   }
   return { passkeySessionTtlMs: value as number };
+}
+
+const DEBUG_ANDROID_ORIGIN_PATTERN = /^android:apk-key-hash:[A-Za-z0-9_-]{43}$/;
+
+/**
+ * Local-development escape hatch: extra Android signing origins (debug APK identities)
+ * accepted during passkey verification. Never set outside local development; release
+ * deployments must leave this unset so only the release origin is accepted.
+ */
+export function readDebugAndroidOrigins(value: unknown): { debugAndroidOrigins?: readonly string[] } {
+  if (value === undefined) return {};
+  if (!Array.isArray(value) || value.length === 0 || value.length > 8) {
+    throw new SecurityError("SECURITY_INVALID_INPUT", "debugAndroidOrigins config is invalid");
+  }
+  const origins: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string" || !DEBUG_ANDROID_ORIGIN_PATTERN.test(entry) || entry === ANDROID_WEBAUTHN_ORIGIN) {
+      throw new SecurityError("SECURITY_INVALID_INPUT", "debugAndroidOrigins config is invalid");
+    }
+    if (!origins.includes(entry)) origins.push(entry);
+  }
+  logWarn("security", "debugAndroidOrigins configured: accepting debug Android passkey origins (local development only)");
+  return { debugAndroidOrigins: origins };
 }
 
 function lanIPv4Addresses(): readonly string[] {

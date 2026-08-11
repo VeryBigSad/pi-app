@@ -33,6 +33,7 @@ export class UserAuthenticationService implements UserAuthenticationRuntime {
     private readonly store: HostStore,
     private readonly revocations: SqliteRevocationRegistry,
     private readonly now: () => number = () => Date.now(),
+    private readonly debugAndroidOrigins?: readonly string[],
   ) {}
 
   async assertionOptions(binding: UserAuthenticationBinding, signal: AbortSignal): Promise<JsonObject> {
@@ -84,6 +85,7 @@ export class UserAuthenticationService implements UserAuthenticationRuntime {
       expectedChallenge: pending.challenge,
       credential: stored,
       revocations: this.revocations,
+      ...(this.debugAndroidOrigins === undefined ? {} : { allowedOrigins: this.debugAndroidOrigins }),
     });
     await this.store.updateOwnerCredentialCounter(stored.id, result.newCounter);
     return complete({
