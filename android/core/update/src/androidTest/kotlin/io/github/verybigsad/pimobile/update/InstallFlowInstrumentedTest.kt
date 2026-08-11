@@ -56,11 +56,12 @@ class InstallFlowInstrumentedTest {
         store.write(PersistedUpdateSnapshot(highWaterMark = 99L, candidate = unverified, authorizedVersionCode = 99L))
         val controller = UpdateInstallController(context, store)
         val candidate = unverified.toDomain()
+        val sessionsBefore = UpdateManager.installerSessionCount(context)
         val error = runCatching {
             controller.stageAndCommit(candidate, store.candidateFile(candidate.versionCode))
         }.exceptionOrNull()
         assertThat((error as UpdateException).code).isEqualTo(UpdateError.NOT_VERIFIED)
-        assertThat(UpdateManager.installerSessionCount(context)).isEqualTo(0)
+        assertThat(UpdateManager.installerSessionCount(context)).isEqualTo(sessionsBefore)
     }
 
     @Test
@@ -82,11 +83,12 @@ class InstallFlowInstrumentedTest {
         store.write(PersistedUpdateSnapshot(highWaterMark = 98L, candidate = persisted, authorizedVersionCode = 98L))
         store.candidateFile(98L).writeBytes(tampered)
         val controller = UpdateInstallController(context, store)
+        val sessionsBefore = UpdateManager.installerSessionCount(context)
         val error = runCatching {
             controller.stageAndCommit(persisted.toDomain(), store.candidateFile(98L))
         }.exceptionOrNull()
         assertThat((error as UpdateException).code).isEqualTo(UpdateError.DOWNLOAD_HASH_MISMATCH)
-        assertThat(UpdateManager.installerSessionCount(context)).isEqualTo(0)
+        assertThat(UpdateManager.installerSessionCount(context)).isEqualTo(sessionsBefore)
     }
 
     @Test

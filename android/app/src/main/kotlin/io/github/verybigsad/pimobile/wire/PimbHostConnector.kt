@@ -15,7 +15,11 @@ import io.github.verybigsad.pimobile.network.PathAttempt
 import io.github.verybigsad.pimobile.network.PathConnection
 import io.github.verybigsad.pimobile.network.PathRaceCoordinator
 import io.github.verybigsad.pimobile.network.PimbStreamTransport
+import io.github.verybigsad.pimobile.network.RelayAudience
+import io.github.verybigsad.pimobile.network.RelayProofCodec
 import io.github.verybigsad.pimobile.network.StreamByteChannel
+import io.github.verybigsad.pimobile.network.WebSocketBinaryByteChannel
+import io.github.verybigsad.pimobile.network.asRelayProofSigner
 import io.github.verybigsad.pimobile.network.TlsContexts
 import io.github.verybigsad.pimobile.network.TransportPathKind
 import io.github.verybigsad.pimobile.protocol.FrameKind
@@ -34,6 +38,7 @@ import io.github.verybigsad.pimobile.storage.StoredMessageRole
 import io.github.verybigsad.pimobile.voice.MacVoiceError
 import io.github.verybigsad.pimobile.wire.WireMessages.string
 import java.io.ByteArrayInputStream
+import java.net.URI
 import java.security.KeyStore
 import java.security.cert.CertificateFactory
 import javax.net.ssl.KeyManager
@@ -53,11 +58,13 @@ import kotlinx.serialization.json.longOrNull
 /**
  * Direct-vs-relay racing host connector over PIMB/TLS 1.3 mTLS.
  *
+ * The relay attempt mirrors the proven pairing path (`RelayPairingPath`): it opens a WSS
+ * device-data tunnel to `wss://relay-host/v1/routes/{route}/data` with a self-issued
+ * `device-data` proof (`X-Relay-Proof`) signed by the Keystore route key via
+ * `DeviceKeys.routePayloadSigner`, the relay notifies the Mac which attaches `mac-data` and
+ * splices, then the device runs inner mTLS 1.3 (paired CA trust, macId SAN) over the tunnel.
+ *
  * Adapter gaps:
- * - Relay data attach needs a caller-created device-data route proof signed by the Keystore
- *   route key, but security's only signer entry point requires a rendezvousId-bearing
- *   challenge (plan §2.2 mismatch). The relay attempt therefore fails closed with
- *   INVALID_SIGNATURE until security exposes a raw-payload signer; direct paths still race.
  * - Snapshot entries carry no append metadata on the wire; appendOrder falls back to a
  *   positional ordinal, so a later live event can invalidate canonical state and force a
  *   fresh snapshot (honest degradation, never fake content).
@@ -107,14 +114,16 @@ class PimbHostConnector(
             }
             add(
                 PathAttempt { generation ->
-                    throw NetworkException(
-                        NetworkError.INVALID_SIGNATURE,
-                        "Relay device-data proof signing is unavailable until core/security exposes a raw-payload route signer",
-                    )
+                    connectRelay(generation, keyManagers, trustManagers, identity)
                 },
             )
         }
-        val connection = race.connect(attempts)
+        val connection = try {
+            race.connect(attempts)
+        } catch (error: Exception) {
+            android.util.Log.w("PimbHostConnector", "path race failed: ${error.javaClass.simpleName}: ${error.message}")
+            throw error
+        }
         val path = when (connection.kind) {
             TransportPathKind.DIRECT -> TransportPath.DIRECT
             TransportPathKind.RELAY -> TransportPath.RELAY
@@ -136,6 +145,53 @@ class PimbHostConnector(
         )
         scope.launch(Dispatchers.IO) { readerLoop(transport) }
         return connector
+    }
+
+    private suspend fun connectRelay(
+        generation: Long,
+        keyManagers: Array<KeyManager>,
+        trustManagers: Array<TrustManager>,
+        identity: CertificateIdentity,
+    ): PathConnection {
+        val relay = try {
+            URI(profile.relayWssUrl)
+        } catch (error: Exception) {
+            throw NetworkException(NetworkError.MALFORMED_URI, "Paired relay URL is malformed", error)
+        }
+        if (relay.scheme != "wss" || relay.host == null) {
+            throw NetworkException(NetworkError.MALFORMED_URI, "Paired relay URL is not a wss:// endpoint")
+        }
+        val proof = RelayProofCodec().encodeSelfIssuedProof(
+            RelayAudience.DEVICE_DATA,
+            profile.routeId,
+            profile.deviceRouteKeyId,
+            deviceKeys.routePayloadSigner().asRelayProofSigner(),
+        )
+        val basePath = (relay.rawPath ?: "").trimEnd('/')
+        val tunnelUri = URI("wss", null, relay.host, relay.port, "$basePath/v1/routes/${profile.routeId}/data", null, null)
+        val tunnel = try {
+            WebSocketBinaryByteChannel.connect(tunnelUri, mapOf("X-Relay-Proof" to proof.toString(Charsets.UTF_8)))
+        } catch (error: NetworkException) {
+            android.util.Log.w("PimbHostConnector", "relay tunnel failed code=${error.code} msg=${error.message}")
+            throw error
+        } catch (error: Exception) {
+            android.util.Log.w("PimbHostConnector", "relay tunnel unreachable: ${error.javaClass.simpleName}: ${error.message}")
+            throw NetworkException(NetworkError.RELAY_PAIRING_UNAVAILABLE, "Relay data tunnel is unreachable", error)
+        }
+        val context = TlsContexts.mutual(keyManagers, trustManagers, identity)
+        val tls = io.github.verybigsad.pimobile.network.TlsByteChannel.connect(
+            tunnel,
+            context,
+            requireNotNull(tunnelUri.host),
+            if (tunnelUri.port == -1) 443 else tunnelUri.port,
+        )
+        return object : PathConnection {
+            override val kind: TransportPathKind = TransportPathKind.RELAY
+            override val generation: Long = generation
+            override val channel: DuplexByteChannel = tls
+            override suspend fun authenticate() = Unit
+            override suspend fun close() = tls.close()
+        }
     }
 
     private fun certificateSerialFromPeer(connection: PathConnection): String? = null
