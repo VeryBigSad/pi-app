@@ -34,6 +34,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -75,7 +76,8 @@ fun AgentsScreen(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .widthIn(max = CONTENT_MAX_WIDTH)
-                .fillMaxWidth(),
+                .fillMaxWidth()
+                .testTag("agents-list"),
             contentPadding = PaddingValues(horizontal = horizontalPadding, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {

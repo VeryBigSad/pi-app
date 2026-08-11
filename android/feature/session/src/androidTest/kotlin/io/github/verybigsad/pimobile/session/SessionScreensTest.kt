@@ -18,6 +18,7 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.semantics.SemanticsActions
@@ -160,10 +161,13 @@ class SessionScreensTest {
         }
 
         compose.onNodeWithText("Approval expired").assertIsDisplayed()
-        compose.onNodeWithText("Offer expired. Denied by default.").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Deny this exact operation").assertIsNotEnabled()
-        compose.onNodeWithContentDescription("Allow this exact operation once").assertIsNotEnabled()
-        compose.onNodeWithContentDescription("Copy exact normalized arguments").assertHasClickAction()
+        compose.waitUntil(timeoutMillis = 10_000) {
+            compose.onAllNodesWithText("Offer expired. Denied by default.").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText("Offer expired. Denied by default.").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription("Deny this exact operation").performScrollTo().assertIsNotEnabled()
+        compose.onNodeWithContentDescription("Allow this exact operation once").performScrollTo().assertIsNotEnabled()
+        compose.onNodeWithContentDescription("Copy exact normalized arguments").performScrollTo().assertHasClickAction()
     }
 
     @Test
