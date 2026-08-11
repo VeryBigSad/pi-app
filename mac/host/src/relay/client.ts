@@ -236,7 +236,7 @@ export class MacRelayClient {
       if (error != null) {
         this.recordAndReconnect(
           generation,
-          new RelayError("RELAY_TRANSPORT", `relay control write failed: ${String(error?.message ?? "unknown").slice(0, 120)}`),
+          new RelayError("RELAY_TRANSPORT", `relay control write failed: ${error.message.slice(0, 120)}`),
         );
       }
     });
