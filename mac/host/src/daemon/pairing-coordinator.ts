@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { logWarn } from "./log.js";
 import { Pkcs10CertificateRequest } from "@peculiar/x509";
 import { isJsonObject, type Envelope, type JsonObject } from "@pimobile/protocol";
 import type { PairingContext, PairingResult, PairingRuntime } from "../gateway/types.js";
@@ -55,6 +56,7 @@ export class PairingCoordinator implements PairingRuntime {
   private confirmationWaiter: { readonly ceremonyId: string; resolve: (approved: boolean) => void } | undefined;
   private lastIssuedDeviceId: string | undefined;
   private failedAtMs: number | undefined;
+  private openInvitation: { readonly invitationId: string; readonly expiresAtMs: number } | undefined;
 
   constructor(private readonly options: PairingCoordinatorOptions) {
     this.now = options.now ?? (() => Date.now());
@@ -62,6 +64,7 @@ export class PairingCoordinator implements PairingRuntime {
 
   issueInvitation(): { invitationId: string; nonce: string; expiresAtMs: number } {
     const invitation = this.options.ceremonies.issueInvitation(this.now());
+    this.openInvitation = { invitationId: invitation.invitationId, expiresAtMs: invitation.expiresAtMs };
     this.pendingCeremony = undefined;
     this.pendingDeviceRouteKeyId = undefined;
     this.pendingDeviceRoutePublicKey = undefined;
@@ -92,6 +95,10 @@ export class PairingCoordinator implements PairingRuntime {
       }
       return { state: "challenge_pending", invitationId: pending.invitationId };
     }
+    const open = this.openInvitation;
+    if (open !== undefined && open.expiresAtMs > this.now()) {
+      return { state: "invitation_open", invitationId: open.invitationId };
+    }
     if (this.lastIssuedDeviceId !== undefined) return { state: "issued", deviceId: this.lastIssuedDeviceId };
     if (this.failedAtMs !== undefined) return { state: "failed" };
     return { state: "idle" };
@@ -117,6 +124,7 @@ export class PairingCoordinator implements PairingRuntime {
 
   async handle(message: Envelope, context: PairingContext): Promise<PairingResult> {
     const body = message.body;
+    logWarn("pairing", `ceremony message ${message.type}`);
     switch (message.type) {
       case "pair.begin":
         return await this.beginPairing(body, context);
@@ -139,6 +147,7 @@ export class PairingCoordinator implements PairingRuntime {
     this.confirmationWaiter = undefined;
     if (this.pendingCeremony?.status !== "issued") this.failedAtMs = this.failedAtMs ?? this.now();
     this.pendingCeremony = undefined;
+    this.openInvitation = undefined;
     await Promise.resolve();
   }
 
@@ -270,6 +279,7 @@ export class PairingCoordinator implements PairingRuntime {
       createdAtMs: this.now(),
     });
     this.pendingCeremony = issued;
+    this.openInvitation = undefined;
     this.lastIssuedDeviceId = deviceId;
     this.options.onDevicePaired?.({
       deviceId,

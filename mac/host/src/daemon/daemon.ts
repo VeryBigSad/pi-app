@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { logError } from "./log.js";
+import { logError, logWarn } from "./log.js";
 import { networkInterfaces } from "node:os";
 import { constants } from "node:fs";
 import { open, readFile, unlink } from "node:fs/promises";
@@ -348,10 +348,14 @@ export class HostDaemon {
    * pairing_provisional data tunnel, then close the exchange with an acceptance.
    */
   private async handleRelayPairingRequest(pairingId: string): Promise<void> {
+    logWarn("pairing", `relay pairing request received id=${pairingId}`);
     const manager = this.relayManager;
     if (manager === undefined) return;
     const message = await manager.pairing().fetchRequest(pairingId);
-    if (message === undefined) return;
+    if (message === undefined) {
+      logWarn("pairing", `relay pairing request not found id=${pairingId}`);
+      return;
+    }
     let value: unknown;
     try {
       value = JSON.parse(Buffer.from(message).toString("utf8"));
@@ -368,15 +372,18 @@ export class HostDaemon {
       || typeof deviceRouteKeyId !== "string" || !OPAQUE_ID.test(deviceRouteKeyId)
       || typeof deviceRoutePublicKey !== "string" || !BASE64URL.test(deviceRoutePublicKey)
     ) {
+      logWarn("pairing", `relay pairing request rejected id=${pairingId} (invitation mismatch or malformed)`);
       return;
     }
     const spki = Buffer.from(deviceRoutePublicKey, "base64url");
     await manager.admin().addDeviceKey(deviceRouteKeyId, new Uint8Array(spki.buffer, spki.byteOffset, spki.byteLength));
     const reply = Buffer.from(JSON.stringify({ accepted: true, invitationId }), "utf8");
     await manager.pairing().submitReply(pairingId, new Uint8Array(reply.buffer, reply.byteOffset, reply.byteLength));
+    logWarn("pairing", `relay pairing request accepted id=${pairingId}`);
   }
 
   private onRelayTunnel(tunnel: RelayTunnel, notice: RouteNotice): void {
+    logWarn("relay", `tunnel incoming mode=${notice.mode} rendezvous=${notice.rendezvousId}`);
     const inner = this.innerTls;
     const listeners = this.listeners;
     if (inner === undefined || listeners === undefined) {
@@ -386,6 +393,9 @@ export class HostDaemon {
     const provisional = notice.mode === "pairing_provisional";
     void terminateInnerTls(tunnel, inner, provisional)
       .then(async (socket) => {
+        logWarn("relay", `inner TLS established provisional=${String(provisional)}`);
+        socket.once("data", (chunk: Buffer) => logWarn("relay", `inner TLS first app bytes n=${String(chunk.byteLength)}`));
+        setTimeout(() => logWarn("relay", "inner TLS 10s without app data"), 10_000).unref();
         await admitTlsSocket(socket, {
           material: this.requireMaterial(),
           gateway: this.requireGateway(),
@@ -394,7 +404,10 @@ export class HostDaemon {
           activeInvitationId: () => this.pairing?.activeInvitationId(),
         }, provisional);
       })
-      .catch(() => tunnel.destroy());
+      .catch((error: unknown) => {
+        logError("relay", "inner TLS termination", error);
+        tunnel.destroy();
+      });
   }
 
   private requireGateway(): HostGateway {

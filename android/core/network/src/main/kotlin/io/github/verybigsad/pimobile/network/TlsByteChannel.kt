@@ -38,6 +38,7 @@ class TlsByteChannel internal constructor(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val outbound = Channel<ByteArray>(128)
     private val inbound = Channel<ByteArray>(128)
+    private val inboundProgress = Channel<Unit>(Channel.CONFLATED)
     private val readMutex = Mutex()
     private val wrapMutex = Mutex()
     private val closed = AtomicBoolean(false)
@@ -110,6 +111,7 @@ class TlsByteChannel internal constructor(
             }
         }
         inbound.close()
+        inboundProgress.close()
         scope.cancel()
         underlying.close()
     }
@@ -118,16 +120,36 @@ class TlsByteChannel internal constructor(
         try {
             for (bytes in outbound) {
                 val source = ByteBuffer.wrap(bytes)
-                wrapMutex.withLock { emitWrap(source) }
+                while (source.hasRemaining()) {
+                    val status = wrapMutex.withLock { emitWrap(source) }
+                    if (status == SSLEngineResult.HandshakeStatus.NEED_UNWRAP && source.hasRemaining()) {
+                        awaitInboundProgress()
+                    }
+                }
             }
         } catch (error: Exception) {
             fail(error)
         }
     }
 
-    private suspend fun emitWrap(source: ByteBuffer) {
+    /**
+     * TLS 1.3 post-handshake records (NewSessionTicket, KeyUpdate) leave some engines
+     * (Conscrypt against an OpenSSL/Node peer) in NEED_UNWRAP, where wrap consumes nothing
+     * until the pending inbound record is processed. Wait for the unwrap loop to make
+     * progress instead of spinning; a peer that never delivers fails the channel instead
+     * of deadlocking the write path.
+     */
+    private suspend fun awaitInboundProgress() {
+        try {
+            withTimeout(TLS_QUEUE_TIMEOUT_MILLIS) { inboundProgress.receive() }
+        } catch (error: TimeoutCancellationException) {
+            throw NetworkException(NetworkError.TRANSPORT_EXHAUSTED, "TLS write stalled awaiting post-handshake inbound", error)
+        }
+    }
+
+    private suspend fun emitWrap(source: ByteBuffer): SSLEngineResult.HandshakeStatus {
         var target = ByteBuffer.allocate(tlsBufferSize(engine.session.packetBufferSize, 1_024))
-        do {
+        while (true) {
             target.clear()
             val result = engine.wrap(source, target)
             when (result.status) {
@@ -142,8 +164,8 @@ class TlsByteChannel internal constructor(
                 SSLEngineResult.Status.BUFFER_UNDERFLOW -> tlsFailure("TLS wrap underflow")
             }
             runTasks(result.handshakeStatus, engine)
-            if (result.status == SSLEngineResult.Status.CLOSED) return
-        } while (source.hasRemaining())
+            return result.handshakeStatus
+        }
     }
 
     private suspend fun unwrapLoop() {
@@ -208,6 +230,7 @@ class TlsByteChannel internal constructor(
                 }
             }
             runTasks(result.handshakeStatus, engine)
+            if (result.bytesConsumed() > 0) inboundProgress.trySend(Unit)
             if (result.handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_WRAP) {
                 wrapMutex.withLock { emitWrap(EMPTY_BUFFER.duplicate()) }
             }
@@ -234,6 +257,7 @@ class TlsByteChannel internal constructor(
         if (closed.compareAndSet(false, true)) {
             outbound.close(error)
             inbound.close(error)
+            inboundProgress.close()
             runCatching { underlying.close() }
             scope.cancel("TLS channel failed", error)
         }

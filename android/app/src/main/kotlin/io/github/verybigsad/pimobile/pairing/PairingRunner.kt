@@ -94,14 +94,19 @@ class PairingRunner(
     suspend fun run() {
         try {
             onEvent(PairingProgressEvent.Connecting)
+            // Field names only; diagnostics for path selection.
+            android.util.Log.w("PairingRunner", "invitation fields: ${invitation.signedPayload().keys.sorted()}")
             val keys = deviceKeys.getOrCreate(deviceId)
             val csrSha256 = MacIdentityDeriver.sha256Hex(keys.csrDer)
             val routeKeyId = "device-route-$deviceId"
             val routePublicKey = Base64.getUrlEncoder().withoutPadding().encodeToString(keys.routePublicKeySpki)
 
             val rendezvous = try {
-                RelayPairingRendezvous.fromInvitation(invitation)
+                RelayPairingRendezvous.fromInvitation(invitation).also {
+                    android.util.Log.w("PairingRunner", "rendezvous extracted: ${it != null}")
+                }
             } catch (error: NetworkException) {
+                android.util.Log.w("PairingRunner", "rendezvous error: ${error.code.name}")
                 relayFailure.compareAndSet(null, error)
                 null
             }
@@ -144,6 +149,9 @@ class PairingRunner(
                             )
                         } catch (error: NetworkException) {
                             relayFailure.compareAndSet(null, error)
+                            throw error
+                        } catch (error: Throwable) {
+                            android.util.Log.w("PairingRunner", "relay path threw: ${error.javaClass.simpleName}: ${error.message?.take(160)}")
                             throw error
                         }
                         object : PathConnection {
@@ -190,10 +198,12 @@ class PairingRunner(
         csrDer: ByteArray,
     ) {
         val invitationId = invitation.invitationId.toString()
+        android.util.Log.w("PairingRunner", "sending pair.begin")
         transport.send(
             FrameKind.Json,
             WireMessages.encode("pair.begin", WireMessages.pairBegin(invitationId, routeKeyId, routePublicKey, csrSha256)),
         )
+        android.util.Log.w("PairingRunner", "pair.begin sent")
 
         val options = awaitMessage(transport, setOf("auth.registration.options", "auth.assertion.options"))
             ?: fail("PAIRING_NO_OPTIONS")
@@ -345,6 +355,8 @@ class PairingRunner(
     /** Typed relay failure codes (PAIRING_RELAY_*) win when every raced path failed. */
     private fun connectFailureCode(error: NetworkException): String {
         val relay = relayFailure.get()
+        // Codes only; never payloads or endpoints.
+        android.util.Log.w("PairingRunner", "connect failed: direct=${error.code.name} relay=${relay?.code?.name ?: "none"}")
         if (relay != null) return relayFailureCode(relay)
         return "PAIRING_CONNECT_${error.code.name}"
     }

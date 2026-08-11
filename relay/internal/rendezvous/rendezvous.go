@@ -100,13 +100,18 @@ func (s *Store[T]) Take(routeID, id, nonce string) (Match[T], error) {
 	return Match[T]{Peer: entry.peer, Done: entry.done}, nil
 }
 
-func (s *Store[T]) Cancel(id string) {
+// Cancel reports whether a pending entry was cancelled. A false result means
+// the rendezvous was already taken (splice active) or never existed; callers
+// must not tear down an active splice in that case.
+func (s *Store[T]) Cancel(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if entry, ok := s.entries[id]; ok {
 		delete(s.entries, id)
 		close(entry.done)
+		return true
 	}
+	return false
 }
 
 func (s *Store[T]) cleanupLocked() {

@@ -53,12 +53,13 @@ type exchange struct {
 }
 
 type Store struct {
-	mu         sync.Mutex
-	byID       map[string]*exchange
-	byRoute    map[string]string
-	lastCreate map[string]time.Time
-	now        func() time.Time
-	random     func(int) (string, error)
+	mu          sync.Mutex
+	byID        map[string]*exchange
+	byRoute     map[string]string
+	lastCreate  map[string]time.Time
+	provisional map[string]time.Time
+	now         func() time.Time
+	random      func(int) (string, error)
 }
 
 func New(now func() time.Time) *Store {
@@ -160,6 +161,29 @@ func (s *Store) Request(routeID, id string) ([]byte, error) {
 		return nil, ErrNotReady
 	}
 	return append([]byte(nil), exchange.request...), nil
+}
+
+// MarkProvisional records that the next device-data attachment for the route
+// belongs to an accepted provisional pairing.
+func (s *Store) MarkProvisional(routeID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.provisional == nil {
+		s.provisional = map[string]time.Time{}
+	}
+	s.provisional[routeID] = s.now().Add(Lifetime)
+}
+
+// ConsumeProvisional reports and clears a provisional pairing mark for the route.
+func (s *Store) ConsumeProvisional(routeID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	until, ok := s.provisional[routeID]
+	if !ok {
+		return false
+	}
+	delete(s.provisional, routeID)
+	return s.now().Before(until)
 }
 
 // SubmitReply stores the route owner's one reply; it requires a request.

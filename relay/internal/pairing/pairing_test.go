@@ -174,3 +174,27 @@ func sequentialIDs() func(int) (string, error) {
 func routeName(index int) string {
 	return "route-" + string(rune('a'+index%26)) + string(rune('a'+index/26))
 }
+
+func TestProvisionalMarkConsumeOnce(t *testing.T) {
+	now := time.Now()
+	s := New(func() time.Time { return now })
+	if s.ConsumeProvisional("route-1") {
+		t.Fatal("unmarked route consumed")
+	}
+	s.MarkProvisional("route-1")
+	if !s.ConsumeProvisional("route-1") {
+		t.Fatal("marked route not consumed")
+	}
+	if s.ConsumeProvisional("route-1") {
+		t.Fatal("mark consumed twice")
+	}
+	s.MarkProvisional("route-2")
+	expired := New(func() time.Time { return now.Add(Lifetime + time.Second) })
+	_ = expired
+	s2 := New(func() time.Time { return now })
+	s2.MarkProvisional("route-3")
+	s2.now = func() time.Time { return now.Add(Lifetime + time.Second) }
+	if s2.ConsumeProvisional("route-3") {
+		t.Fatal("expired mark consumed")
+	}
+}

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { logError, logWarn } from "../daemon/log.js";
 import {
   FrameKind,
   MAX_BINARY_DATA_BYTES,
@@ -234,9 +235,11 @@ class GatewayConnectionImpl implements GatewayConnection {
       while (!this.controller.signal.aborted) {
         const frame = await this.reader.next(this.controller.signal);
         if (frame === null) break;
+        logWarn("gateway", `frame kind=${String(frame.kind)} bytes=${String(frame.payload.byteLength)} phase=${this.currentPhase}`);
         await this.handleFrame(frame.kind, frame.payload);
       }
     } catch (error) {
+      logError("gateway", "read loop", error);
       if (!this.controller.signal.aborted) await this.handleFailure(error);
     } finally {
       await this.cleanup();

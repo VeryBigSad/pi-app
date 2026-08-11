@@ -12,6 +12,7 @@ const MAX_READ_BYTES = 1024 * 1024 + 12;
 export class DuplexByteTransport implements ByteTransport {
   private reading: Promise<Uint8Array | null> | undefined;
   private closed = false;
+  private pending: Buffer | undefined;
 
   constructor(private readonly stream: Duplex) {}
 
@@ -34,8 +35,20 @@ export class DuplexByteTransport implements ByteTransport {
         else rejectRead(error instanceof Error ? error : new Error("transport read failed"));
       };
       const onReadable = (): void => {
-        const chunk = stream.read(bounded) as Buffer | null;
-        if (chunk !== null) settle(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength));
+        if (this.pending !== undefined && this.pending.byteLength > 0) {
+          const head = this.pending.subarray(0, bounded);
+          this.pending = this.pending.subarray(head.byteLength);
+          settle(new Uint8Array(head.buffer, head.byteOffset, head.byteLength));
+          return;
+        }
+        // read(size) waits for the full size or EOF; read() drains whatever is
+        // buffered. A TLS record smaller than maxBytes must still resolve.
+        const chunk = stream.read() as Buffer | null;
+        if (chunk === null) return;
+        const head = chunk.subarray(0, bounded);
+        const rest = chunk.subarray(head.byteLength);
+        this.pending = rest.byteLength > 0 ? Buffer.from(rest) : undefined;
+        settle(new Uint8Array(head.buffer, head.byteOffset, head.byteLength));
       };
       const onEnd = (): void => settle(null);
       const onClose = (): void => settle(null);

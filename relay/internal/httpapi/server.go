@@ -237,6 +237,7 @@ func (s *Server) openPairing(w http.ResponseWriter, r *http.Request) {
 		writeError(w, pairingStatus(err), "pairing_failed")
 		return
 	}
+	log.Printf("pairing exchange opened route=%s pairing=%s", routeID, handle.ID)
 	writeResponse(w, http.StatusCreated, map[string]string{"pairingId": handle.ID, "secret": handle.Secret, "expiresAt": handle.ExpiresAt.UTC().Format(time.RFC3339Nano)})
 }
 
@@ -260,6 +261,7 @@ func (s *Server) submitPairingRequest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, pairingStatus(err), "pairing_failed")
 		return
 	}
+	log.Printf("pairing request stored route=%s pairing=%s", routeID, pairingID)
 	s.controls.notify(routeID, map[string]string{"type": "pairing.request", "pairingId": pairingID})
 	w.WriteHeader(http.StatusAccepted)
 }
@@ -298,6 +300,7 @@ func (s *Server) submitPairingReply(w http.ResponseWriter, r *http.Request) {
 		writeError(w, pairingStatus(err), "pairing_failed")
 		return
 	}
+	s.pairing.MarkProvisional(routeID)
 	w.WriteHeader(http.StatusAccepted)
 }
 
@@ -380,37 +383,50 @@ func (s *Server) data(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
+	log.Printf("data connected route=%s key=%s audience=%s", routeID, proof.Signed.KeyID, proof.Signed.Audience)
 	live := s.live.add(routeID, proof.Signed.KeyID, conn)
 	defer s.live.remove(routeID, proof.Signed.KeyID, live)
 	if _, err := s.registry.Lookup(routeID, proof.Signed.KeyID); err != nil {
 		return
 	}
 	if proof.Signed.Audience == "device-data" {
-		s.deviceData(r.Context(), routeID, proof.Signed.KeyID, conn, live)
+		s.deviceData(r.Context(), routeID, proof.Signed.KeyID, conn, live, s.pairing.ConsumeProvisional(routeID))
 		return
 	}
 	s.macData(r.Context(), routeID, proof, conn)
 }
 
-func (s *Server) deviceData(ctx context.Context, routeID, keyID string, conn *websocket.Conn, live *liveConn) {
+func (s *Server) deviceData(ctx context.Context, routeID, keyID string, conn *websocket.Conn, live *liveConn, provisional bool) {
 	notice, done, err := s.pending.Start(routeID, &devicePeer{conn: conn, keyID: keyID})
 	if err != nil {
+		log.Printf("rendezvous start failed route=%s error=%v", routeID, err)
 		return
 	}
-	if !s.controls.notice(routeID, notice) {
+	if !s.controls.noticeMode(routeID, notice, provisional) {
+		log.Printf("notice delivery failed route=%s rendezvous=%s provisional=%v", routeID, notice.ID, provisional)
 		s.pending.Cancel(notice.ID)
 		return
 	}
+	log.Printf("notice sent route=%s rendezvous=%s provisional=%v", routeID, notice.ID, provisional)
 	timer := time.NewTimer(notice.ExpiresAt.Sub(s.now()))
 	defer timer.Stop()
-	select {
-	case <-done:
-	case <-live.closed:
-		s.pending.Cancel(notice.ID)
-	case <-timer.C:
-		s.pending.Cancel(notice.ID)
-	case <-ctx.Done():
-		s.pending.Cancel(notice.ID)
+	for {
+		select {
+		case <-done:
+			return
+		case <-live.closed:
+			s.pending.Cancel(notice.ID)
+			return
+		case <-timer.C:
+			// Expiry only cancels a rendezvous that is still pending; once taken,
+			// the splice owns the connection lifetime.
+			if s.pending.Cancel(notice.ID) {
+				return
+			}
+		case <-ctx.Done():
+			s.pending.Cancel(notice.ID)
+			return
+		}
 	}
 }
 
@@ -420,10 +436,13 @@ func (s *Server) macData(ctx context.Context, routeID string, proof auth.Proof, 
 	}
 	match, err := s.pending.Take(routeID, proof.Signed.RendezvousID, proof.Signed.Nonce)
 	if err != nil {
+		log.Printf("rendezvous take failed route=%s rendezvous=%s error=%v", routeID, proof.Signed.RendezvousID, err)
 		return
 	}
 	defer close(match.Done)
+	log.Printf("splice start route=%s rendezvous=%s", routeID, proof.Signed.RendezvousID)
 	s.spliceData(ctx, routeID, []string{proof.Signed.KeyID, match.Peer.keyID}, match.Peer.conn, conn)
+	log.Printf("splice end route=%s rendezvous=%s", routeID, proof.Signed.RendezvousID)
 }
 
 // spliceData splices a data tunnel and ends it once either participant's key
@@ -615,7 +634,15 @@ func (h *controlHub) notify(routeID string, value any) bool {
 }
 
 func (h *controlHub) notice(routeID string, notice rendezvous.Notice) bool {
-	return h.notify(routeID, map[string]any{"type": "route.notice", "rendezvousId": notice.ID, "nonce": notice.Nonce, "expiresAt": notice.ExpiresAt.UTC().Format(time.RFC3339Nano), "mode": "normal"})
+	return h.noticeMode(routeID, notice, false)
+}
+
+func (h *controlHub) noticeMode(routeID string, notice rendezvous.Notice, provisional bool) bool {
+	mode := "normal"
+	if provisional {
+		mode = "pairing_provisional"
+	}
+	return h.notify(routeID, map[string]any{"type": "route.notice", "rendezvousId": notice.ID, "nonce": notice.Nonce, "expiresAt": notice.ExpiresAt.UTC().Format(time.RFC3339Nano), "mode": mode})
 }
 
 func (s *controlSession) write(ctx context.Context, value any) bool {
@@ -665,29 +692,33 @@ func splice(ctx context.Context, left, right *websocket.Conn) {
 		})
 	}
 	go func() {
-		copyMessages(ctx, left, right)
+		copyMessages(ctx, "device", left, right)
 		closeBoth()
 	}()
-	copyMessages(ctx, right, left)
+	copyMessages(ctx, "mac", right, left)
 	closeBoth()
 }
 
-func copyMessages(ctx context.Context, source, destination *websocket.Conn) {
+func copyMessages(ctx context.Context, direction string, source, destination *websocket.Conn) {
 	buffer := make([]byte, 32<<10)
 	for {
 		kind, reader, err := source.Reader(ctx)
 		if err != nil || kind != websocket.MessageBinary {
+			log.Printf("splice read end direction=%s error=%v kind=%v", direction, err, kind)
 			return
 		}
 		writer, err := destination.Writer(ctx, websocket.MessageBinary)
 		if err != nil {
+			log.Printf("splice writer failed direction=%s error=%v", direction, err)
 			return
 		}
-		_, copyErr := io.CopyBuffer(writer, reader, buffer)
+		n, copyErr := io.CopyBuffer(writer, reader, buffer)
 		closeErr := writer.Close()
 		if copyErr != nil || closeErr != nil {
+			log.Printf("splice copy failed direction=%s bytes=%d copy=%v close=%v", direction, n, copyErr, closeErr)
 			return
 		}
+		log.Printf("splice forward direction=%s bytes=%d", direction, n)
 	}
 }
 
