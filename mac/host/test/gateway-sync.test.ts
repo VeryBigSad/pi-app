@@ -202,7 +202,12 @@ describe("gateway canonical synchronization sequencing", () => {
     const { sequencer, sent } = harness(runtime);
     const signal = new AbortController().signal;
     await expect(sequencer.start({ sessionId, streamEpoch, sequence: "0", leafId: null }, randomReply(), signal)).rejects.toThrow(/cursors/);
-    await expect(sequencer.start({ cursors: [] }, randomReply(), signal)).rejects.toThrow(/cursors/);
+    // Empty cursors are legal: nothing to replay, catalogs + sync.complete are sent.
+    const emptyRuntime = new PlanRuntime({ kind: "replay", sessionId, streamEpoch, fromSequence: 0n, throughSequence: 0n, events: [] });
+    const emptyRun = harness(emptyRuntime);
+    await emptyRun.sequencer.start({ cursors: [] }, randomReply(), signal);
+    expect(emptyRun.sent.map((frame) => frame.type)).toEqual(["session.catalog", "agents.catalog", "sync.complete"]);
+    expect(emptyRun.sequencer.completedWithoutWork).toBe(true);
     await expect(sequencer.start({ cursors: [{ sessionId: "nope", streamEpoch, sequence: "0", leafId: null }] }, randomReply(), signal)).rejects.toThrow(/identity/);
     await expect(sequencer.start({ cursors: [{ sessionId, streamEpoch, sequence: "0", leafId: "xyz" }] }, randomReply(), signal)).rejects.toThrow(/leaf/);
     expect(sent).toEqual([]);

@@ -129,6 +129,8 @@ export type GatewaySyncPlan = ReplaySyncPlan | SnapshotSyncPlan;
 export interface SyncRuntime {
   prepare(resume: JsonObject, signal: AbortSignal): Promise<GatewaySyncPlan>;
   committed(plan: GatewaySyncPlan, sequence: bigint, signal: AbortSignal): Promise<void>;
+  /** Resume-shaped entries for every currently supervised session; used when a device resumes with no cursors. */
+  listAll?(signal: AbortSignal): Promise<JsonObject[]>;
 }
 
 export interface CommandGuardContext {

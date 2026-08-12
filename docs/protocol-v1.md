@@ -122,7 +122,7 @@ Connection phases are `PAIRING_PROVISIONAL`, `NEGOTIATING`, `DEVICE_AUTHENTICATE
 |---|---|
 | Control | `client.hello`, `server.hello`, `ping`, `pong`, `error`, `close` |
 | Pairing/authentication | `pair.begin`, `pair.csr`, `auth.registration.options`, `auth.registration.response`, `auth.assertion.options`, `auth.assertion.response`, `auth.result`, `auth.lock`, `pair.confirm`, `pair.result` |
-| Sync | `sync.resume`, `sync.replay`, `sync.reset`, `message.append`, `snapshot.waiting`, `snapshot.begin`, `snapshot.page`, `snapshot.end`, `event.batch`, `event.ack` |
+| Sync | `sync.resume`, `sync.complete`, `sync.replay`, `sync.reset`, `message.append`, `snapshot.waiting`, `snapshot.begin`, `snapshot.page`, `snapshot.end`, `event.batch`, `event.ack` |
 | Session | `session.catalog`, `session.settled` |
 | Agents | `agents.catalog`, `agents.update` |
 | Commands | `command.submit`, `command.query`, `command.state`, `command.result` |
@@ -244,6 +244,7 @@ Android persists `(sessionId, streamEpoch, sequence, leafId)` only after its red
 
 The host sends `agents.catalog {sessions: [{sessionId, agents}]}` on sync and resume. It is the full current snapshot for each included session; each `agents` array has at most 256 entries. An agent is `{agentId, parentAgentId?, description, agentType, status, startedAt, endedAt?, toolUses?, model?}`. `agentId` is an opaque identifier; `parentAgentId` forms the visible subagent tree. `status` is one of `running`, `waiting`, `completed`, `failed`, or `stopped`; descriptions are at most 256 characters. The host sends `agents.update {sessionId, agent}` whenever an agent changes. Receivers upsert the agent by `agentId` in that session. This is current-state telemetry only: no agent history is retained, and a later catalog replaces the displayed set for its session.
 
+- Empty-resume completion: when `sync.resume` carries no per-session work (empty `cursors`, a fresh device with nothing to replay), the host sends `session.catalog`/`agents.catalog` and then `sync.complete` with an empty body `{}` (SYNCING phase, not state-changing). Receivers end their syncing state on `sync.complete`; no `event.ack` is required for it.
 - Matching epoch + contiguous retained events: host emits `sync.replay` then ordered batches.
 - Missing range, unknown cursor, epoch mismatch, or leaf mismatch: host emits `sync.reset`; Android drops provisional/live state and retains drafts.
 - Canonical snapshot work runs inside the session actor, blocks bridge mutations, and waits for Pi idle/settled. If a gap occurs while active, `snapshot.waiting` marks transcript/live provisional data unavailable; no partial snapshot is emitted.

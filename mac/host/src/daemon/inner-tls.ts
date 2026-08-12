@@ -60,7 +60,14 @@ export function terminateInnerTls(
       if (settled) return;
       settled = true;
       socket.removeListener("error", fail);
-      if (!provisional && !socket.authorized) {
+      // Node never sets authorized=true on a manually wrapped server TLSSocket;
+      // verify via the authorization error and peer certificate presence instead.
+      // @types/node declares authorizationError non-nullable, but at runtime it is
+      // null when verification succeeded — treat the value as unknown on purpose.
+      const authorizationError: unknown = socket.authorizationError;
+      const peer: unknown = socket.getPeerCertificate(true);
+      const peerMissing = peer === null || (typeof peer === "object" && Object.keys(peer).length === 0);
+      if (!provisional && (authorizationError !== null || peerMissing)) {
         socket.destroy();
         rejectHandshake(new Error("inner TLS peer is not authorized"));
         return;

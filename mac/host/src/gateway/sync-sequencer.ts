@@ -28,12 +28,32 @@ interface PendingCommit {
 export class CanonicalSyncSequencer {
   private pending: PendingCommit | undefined;
   private queue: JsonObject[] = [];
+  /** Set when a resume carried no per-session work: catalogs + sync.complete were sent, no ack fence. */
+  private completedEmpty = false;
 
   constructor(private readonly runtime: SyncRuntime, private readonly send: SyncSend) {}
 
+  /** True when start() completed an empty resume without any pending commit. */
+  get completedWithoutWork(): boolean {
+    return this.completedEmpty;
+  }
+
   async start(resume: JsonObject, replyTo: string, signal: AbortSignal): Promise<void> {
     if (this.pending !== undefined) throw new SyncSequenceError("Synchronization is already active");
+    this.completedEmpty = false;
     this.queue = validateResume(resume);
+    if (this.queue.length === 0) {
+      // Fresh device: no cursors means "snapshot everything currently supervised".
+      this.queue = (await this.runtime.listAll?.(signal)) ?? [];
+    }
+    if (this.queue.length === 0) {
+      // No sessions exist at all: publish the empty catalogs and complete the fence.
+      await this.send("session.catalog", { sessions: [] }, replyTo);
+      await this.send("agents.catalog", { sessions: [] }, replyTo);
+      await this.send("sync.complete", {}, replyTo);
+      this.completedEmpty = true;
+      return;
+    }
     try {
       await this.startNext(replyTo, signal);
     } catch (error) {
@@ -154,7 +174,7 @@ export class CanonicalSyncSequencer {
 
 function validateResume(resume: JsonObject): JsonObject[] {
   const cursors = resume["cursors"];
-  if (!Array.isArray(cursors) || cursors.length === 0 || cursors.length > MAX_CURSORS) {
+  if (!Array.isArray(cursors) || cursors.length > MAX_CURSORS) {
     throw new SyncSequenceError("sync.resume cursors are invalid");
   }
   return cursors.map((cursor) => {

@@ -373,6 +373,9 @@ fun assertWireMessage(type: String, body: JsonObject) {
             }
             body["expiresAt"]?.let { requireDateTime(it.stringOrNull()) }
         }
+        "sync.complete" -> {
+            if (body.isNotEmpty()) protocolViolation("sync.complete requires an empty body")
+        }
         "sync.resume" -> {
             val cursors = (body["cursors"] as? JsonArray) ?: protocolViolation("sync.resume requires a cursors array")
             if (cursors.size > MAX_SYNC_CURSORS) protocolViolation("sync.resume cursors exceed their bound")

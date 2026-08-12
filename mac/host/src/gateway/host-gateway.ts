@@ -488,6 +488,12 @@ class GatewayConnectionImpl implements GatewayConnection {
       if (this.phase() !== "SYNCING" || this.authorizationGeneration !== authorizationGeneration) {
         throw new GatewayRuntimeError("AUTH_REQUIRED", "Synchronization authorization expired");
       }
+      if (this.sync.completedWithoutWork) {
+        // Nothing to commit: catalogs + sync.complete were sent, no ack fence needed.
+        controller.abort("sync_committed");
+        if (this.syncController === controller) this.syncController = undefined;
+        this.currentPhase = "READY";
+      }
     } catch (error) {
       if (this.syncController === controller) this.syncController = undefined;
       controller.abort("sync_failed");

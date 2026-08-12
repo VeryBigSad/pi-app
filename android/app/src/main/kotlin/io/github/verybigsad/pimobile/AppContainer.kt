@@ -274,12 +274,24 @@ class AppContainer(
         credential
     }
 
-    private fun passkeyAvailability(): AppPasskeyAvailability =
-        when (application.passkeyBridge.availability()) {
+    /** Re-probes the passkey provider once an Activity is attached and publishes the result. */
+    fun refreshPasskeyAvailability() {
+        coordinator.submit(AppIntent.PasskeyAvailabilityChanged(passkeyAvailability()))
+    }
+
+    private fun passkeyAvailability(): AppPasskeyAvailability {
+        // Debug builds run ceremonies through the installed debug passkey executor regardless
+        // of provider probing; core availability() still reports Locked on the debug package
+        // identity, so surface the executor as the provider here.
+        if (BuildConfig.DEBUG && io.github.verybigsad.pimobile.security.PasskeyDebugHooks.executor != null) {
+            return AppPasskeyAvailability.AVAILABLE
+        }
+        return when (application.passkeyBridge.availability()) {
             null -> AppPasskeyAvailability.CHECKING
             is io.github.verybigsad.pimobile.security.PasskeyAvailability.Available -> AppPasskeyAvailability.AVAILABLE
             is io.github.verybigsad.pimobile.security.PasskeyAvailability.Locked -> AppPasskeyAvailability.UNAVAILABLE
         }
+    }
 
     private fun installPush() {
         UnifiedPushRuntime.install(

@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { wireJsonObject } from "./wire-json.js";
 import { isJsonObject, type JsonObject } from "@pimobile/protocol";
 import type {
   CompleteUserVerification,
@@ -57,7 +58,7 @@ export class UserAuthenticationService implements UserAuthenticationRuntime {
         challenge,
         expiresAt: new Date(this.now() + CHALLENGE_TTL_MS).toISOString(),
       },
-      publicKey: publicKey as unknown as JsonObject,
+      publicKey: wireJsonObject(publicKey),
     };
   }
 

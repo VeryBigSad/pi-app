@@ -19,8 +19,17 @@ func TestRegistryPersistsOnlyKeyAndRevocation(t *testing.T) {
 	if err := keys.Register("route-1", "key-1", der, RoleMac); err != nil {
 		t.Fatal(err)
 	}
-	if err := keys.Register("route-1", "key-1", der, RoleMac); err != ErrExists {
-		t.Fatalf("duplicate registration error = %v", err)
+	// Idempotent: identical key re-registration succeeds (re-pairing path).
+	if err := keys.Register("route-1", "key-1", der, RoleMac); err != nil {
+		t.Fatalf("idempotent re-registration error = %v", err)
+	}
+	// Conflicting: same id with different material or role must fail.
+	other := publicDER(t)
+	if err := keys.Register("route-1", "key-1", other, RoleMac); err != ErrExists {
+		t.Fatalf("conflicting registration error = %v", err)
+	}
+	if err := keys.Register("route-1", "key-1", der, RoleDevice); err != ErrExists {
+		t.Fatalf("role-conflicting registration error = %v", err)
 	}
 	key, err := keys.Lookup("route-1", "key-1")
 	if err != nil || key.Revoked || key.Role != RoleMac || string(key.SPKIDER) != string(der) {

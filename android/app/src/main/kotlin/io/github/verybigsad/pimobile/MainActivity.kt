@@ -65,6 +65,7 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         (application as PiMobileApplication).passkeyBridge.attach(this)
         container.notificationPermission.refresh()
+        container.refreshPasskeyAvailability()
     }
 
     override fun onPause() {

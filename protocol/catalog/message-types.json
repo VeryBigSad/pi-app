@@ -19,6 +19,7 @@
     {"type":"pair.confirm","family":"pairing","phases":["PAIRING_PROVISIONAL"],"stateChanging":false},
     {"type":"pair.result","family":"pairing","phases":["PAIRING_PROVISIONAL"],"stateChanging":false},
     {"type":"sync.resume","family":"sync","phases":["USER_AUTHENTICATED","SYNCING"],"stateChanging":false},
+    {"type":"sync.complete","family":"sync","phases":["SYNCING"],"stateChanging":false},
     {"type":"sync.replay","family":"sync","phases":["SYNCING"],"stateChanging":false},
     {"type":"sync.reset","family":"sync","phases":["SYNCING","READY"],"stateChanging":false},
     {"type":"message.append","family":"sync","phases":["SYNCING","READY"],"stateChanging":false},

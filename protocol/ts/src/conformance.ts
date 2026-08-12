@@ -366,6 +366,10 @@ export function assertWireMessage(type: string, body: JsonObject): void {
       if (body["expiresAt"] !== undefined && !isDateTime(body["expiresAt"])) violation("auth.result expiresAt must be a date-time");
       return;
     }
+    case "sync.complete": {
+      if (Object.keys(body).length !== 0) violation("sync.complete requires an empty body");
+      return;
+    }
     case "sync.resume": {
       const cursors = body["cursors"];
       if (!Array.isArray(cursors) || cursors.length > MAX_SYNC_CURSORS) violation("sync.resume requires a bounded cursors array");

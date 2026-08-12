@@ -2,6 +2,7 @@
 package registry
 
 import (
+	"crypto/subtle"
 	"encoding/binary"
 	"errors"
 	"os"
@@ -95,7 +96,15 @@ func (r *Registry) Register(routeID, keyID string, spkiDER []byte, role Role) er
 		if err != nil {
 			return err
 		}
-		if route.Get([]byte(keyID)) != nil {
+		if existing := route.Get([]byte(keyID)); existing != nil {
+			key, err := parseKey(existing)
+			if err != nil {
+				return err
+			}
+			// Idempotent re-registration: same id, same key material, same role, live.
+			if key.Role == role && !key.Revoked && subtle.ConstantTimeCompare(key.SPKIDER, spkiDER) == 1 {
+				return nil
+			}
 			return ErrExists
 		}
 		return route.Put([]byte(keyID), encodeKey(Key{SPKIDER: spkiDER, Role: role}))

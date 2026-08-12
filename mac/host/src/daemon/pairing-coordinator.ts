@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { logWarn } from "./log.js";
+import { wireJsonObject } from "./wire-json.js";
 import { Pkcs10CertificateRequest } from "@peculiar/x509";
 import { isJsonObject, type Envelope, type JsonObject } from "@pimobile/protocol";
 import type { PairingContext, PairingResult, PairingRuntime } from "../gateway/types.js";
@@ -195,7 +196,7 @@ export class PairingCoordinator implements PairingRuntime {
             ceremonyId: ceremony.ceremonyId,
             pairingToken: ceremony.pairingToken,
             binding,
-            publicKey: publicKey as unknown as JsonObject,
+            publicKey: wireJsonObject(publicKey),
           },
         }],
       };
@@ -208,7 +209,7 @@ export class PairingCoordinator implements PairingRuntime {
         body: {
           ceremonyId: ceremony.ceremonyId,
           binding,
-          publicKey: publicKey as unknown as JsonObject,
+          publicKey: wireJsonObject(publicKey),
         },
       }],
     };

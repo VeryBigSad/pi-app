@@ -208,7 +208,16 @@ export class HostStore {
 
   private async persist(): Promise<void> {
     const state = this.requireState();
-    await atomicWriteFile(this.path, `${JSON.stringify(state, null, 2)}\n`, 0o600);
+    // Uint8Array serializes as a byte object; persist public keys as base64url strings
+    // to match the read schema exactly.
+    const serializable = {
+      ...state,
+      ownerCredentials: state.ownerCredentials.map((credential) => ({
+        ...credential,
+        publicKey: Buffer.from(credential.publicKey).toString("base64url"),
+      })),
+    };
+    await atomicWriteFile(this.path, `${JSON.stringify(serializable, null, 2)}\n`, 0o600);
   }
 }
 
@@ -275,7 +284,13 @@ function parseState(raw: Buffer): HostStoreState {
 function parseCredential(value: unknown): StoredOwnerCredential {
   if (!isRecord(value)) throw new SecurityError("SECURITY_KEY_STORAGE_FAILED", "credential entry is malformed");
   const id = requireString(value["id"], "id");
-  const publicKey = requireString(value["publicKey"], "publicKey");
+  // Tolerate the legacy byte-object form written before the base64url fix.
+  const rawPublicKey = value["publicKey"];
+  const publicKey = typeof rawPublicKey === "string"
+    ? rawPublicKey
+    : isRecord(rawPublicKey)
+      ? Buffer.from(Object.keys(rawPublicKey).map((key) => Number(key)).sort((a, b) => a - b).map((key) => Number(rawPublicKey[key]))).toString("base64url")
+      : requireString(rawPublicKey, "publicKey");
   const counter = value["counter"];
   const transports = value["transports"];
   if (

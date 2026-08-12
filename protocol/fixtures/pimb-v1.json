@@ -2525,6 +2525,21 @@
       }
     },
     {
+      "name": "sync-complete-empty",
+      "schema": "messages",
+      "valid": true,
+      "value": {
+        "v": {
+          "major": 1,
+          "minor": 0
+        },
+        "type": "sync.complete",
+        "messageId": "550e8400-e29b-41d4-a716-446655440050",
+        "replyTo": null,
+        "body": {}
+      }
+    },
+    {
       "name": "message-append",
       "schema": "messages",
       "valid": true,
@@ -3066,6 +3081,20 @@
         ]
       },
       "valid": true
+    },
+    {
+      "name": "sync-complete",
+      "type": "sync.complete",
+      "body": {},
+      "valid": true
+    },
+    {
+      "name": "sync-complete-non-empty-body",
+      "type": "sync.complete",
+      "body": {
+        "unexpected": true
+      },
+      "valid": false
     },
     {
       "name": "sync-resume-noncanonical-sequence",

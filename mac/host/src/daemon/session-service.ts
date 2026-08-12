@@ -52,6 +52,10 @@ interface SessionActorOptions {
 }
 
 class SessionActor {
+  get sessionId(): string {
+    return this.options.sessionId;
+  }
+
   private readonly lifecycle = new LifecycleTracker();
   private readonly agents = new AgentTracker();
   private readonly streamEpoch = randomUUID();
@@ -272,6 +276,17 @@ export class SessionService implements CommandPathRouter, CommandAuthorizer, Syn
         return Promise.resolve();
       },
     });
+  }
+
+  /** Resume-shaped entries for every supervised session (fresh-device full sync). */
+  listAll(signal: AbortSignal): Promise<JsonObject[]> {
+    signal.throwIfAborted();
+    return Promise.resolve(
+      [...this.actors.values()].map((actor) => ({
+        sessionId: actor.sessionId,
+        streamEpoch: actor.currentStreamEpoch,
+      })),
+    );
   }
 
   async prepare(resume: JsonObject, signal: AbortSignal): Promise<GatewaySyncPlan> {

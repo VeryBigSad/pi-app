@@ -19,6 +19,7 @@
     {"if":{"properties":{"type":{"const":"pair.confirm"}},"required":["type"]},"then":{"properties":{"body":{"$ref":"#/$defs/pairConfirm"}}}},
     {"if":{"properties":{"type":{"const":"pair.result"}},"required":["type"]},"then":{"properties":{"body":{"$ref":"#/$defs/pairResult"}}}},
     {"if":{"properties":{"type":{"const":"sync.resume"}},"required":["type"]},"then":{"properties":{"body":{"$ref":"#/$defs/syncResume"}}}},
+    {"if":{"properties":{"type":{"const":"sync.complete"}},"required":["type"]},"then":{"properties":{"body":{"$ref":"#/$defs/emptyBody"}}}},
     {"if":{"properties":{"type":{"const":"sync.replay"}},"required":["type"]},"then":{"properties":{"body":{"$ref":"#/$defs/syncReplay"}}}},
     {"if":{"properties":{"type":{"const":"sync.reset"}},"required":["type"]},"then":{"properties":{"body":{"$ref":"#/$defs/syncReset"}}}},
     {"if":{"properties":{"type":{"const":"message.append"}},"required":["type"]},"then":{"properties":{"body":{"$ref":"#/$defs/messageAppend"}}}},

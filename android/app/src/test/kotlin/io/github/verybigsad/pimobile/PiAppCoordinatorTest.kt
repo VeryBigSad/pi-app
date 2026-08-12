@@ -413,6 +413,36 @@ class PiAppCoordinatorTest {
     }
 
     @Test
+    fun `sync complete ends syncing and leaves the session list online`() = runHarnessTest(profiles = FakeProfileStore(trustedProfile())) { harness ->
+        harness.cache.sessions[SESSION] = sessionEntity(
+            cursor = CanonicalAppendCursor("00000000-0000-4000-8000-000000000001", "7", null, null),
+        )
+        harness.coordinator.start()
+        advanceUntilIdle()
+        // hydrate -> connect() exactly once, so the live connection generation is 1.
+        harness.coordinator.submit(
+            AppIntent.ConnectionEvent(1, HostConnectionEvent.DeviceAuthenticated(io.github.verybigsad.pimobile.model.TransportPath.DIRECT, "aa".repeat(32))),
+        )
+        advanceUntilIdle()
+        harness.coordinator.submit(
+            AppIntent.ConnectionEvent(1, HostConnectionEvent.AuthResult("ceremony-1", true)),
+        )
+        advanceUntilIdle()
+        assertThat(harness.coordinator.state.value.syncing).isTrue()
+        assertThat(harness.coordinator.state.value.connection).isInstanceOf(ConnectionState.Ready::class.java)
+        assertThat(harness.sentMessages.map { it.first }).contains("sync.resume")
+
+        harness.coordinator.submit(AppIntent.ConnectionEvent(1, HostConnectionEvent.SyncComplete))
+        advanceUntilIdle()
+        val state = harness.coordinator.state.value
+        assertThat(state.syncing).isFalse()
+        assertThat(state.connection).isInstanceOf(ConnectionState.Ready::class.java)
+        val session = state.sessions[SessionId(SESSION)]!!
+        assertThat(session.conversation.availability).isEqualTo(CanonicalAvailability.Current)
+        assertThat(session.conversation.finalizedMessages).isEmpty()
+    }
+
+    @Test
     fun `unpair clears trust and sessions`() = runHarnessTest(profiles = FakeProfileStore(trustedProfile())) { harness ->
         harness.cache.sessions[SESSION] = sessionEntity()
         harness.coordinator.start()
