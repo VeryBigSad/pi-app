@@ -113,6 +113,22 @@ export JAVA_HOME=$(/usr/libexec/java_home -v 21)
 ./gradlew testDebugUnitTest lintDebug         # unit + lint
 ```
 
+### Performance harness
+
+`:android:benchmark` is an opt-in Macrobenchmark/Baseline Profile harness. It profiles the app's R8-minified, shell-profileable `benchmarkRelease` target and uses `CompilationMode.Partial(BaselineProfileMode.Require)`. The deterministic timeline route is unavailable in ordinary `debug` and `release` builds; it uses 10,000 historical events, the production 500-message retention window, and a 100-event-per-second catch-up through the real session screen.
+
+Generate the profile before measuring. This requires a rooted emulator or API 33+ device; retain the generated profile source, then use a Pixel 7-class-or-newer 60 Hz physical device for any release-budget claim:
+
+```bash
+export JAVA_HOME=$(/usr/libexec/java_home -v 21)
+ANDROID_SERIAL=<serial> ./gradlew --no-daemon --no-configuration-cache :android:app:generateReleaseBaselineProfile
+ANDROID_SERIAL=<serial> ./gradlew --no-daemon --no-configuration-cache \
+  :android:benchmark:connectedBenchmarkReleaseAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=io.github.verybigsad.pimobile.benchmark.PiMobileMacrobenchmark
+```
+
+Emulator Macrobenchmark output is diagnostic only and cannot satisfy any performance budget or physical-device gate. No physical benchmark result is claimed here.
+
 Install the debug APK on an emulator or the release APK on a device, then pair by scanning the QR shown by `pi-mobile-host pair`.
 
 ### Relay / infrastructure

@@ -18,13 +18,16 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import io.github.verybigsad.pimobile.model.ConnectionState
+import io.github.verybigsad.pimobile.model.DisconnectReason
 import io.github.verybigsad.pimobile.model.MutualTlsAuthentication
 import io.github.verybigsad.pimobile.model.TransportPath
 import io.github.verybigsad.pimobile.model.TrustState
@@ -48,9 +51,75 @@ class SessionScreensTest {
         compose.onNodeWithText("Steer now").assertHasClickAction().assertIsEnabled()
         compose.onNodeWithText("Queue follow-up").assertHasClickAction().assertIsEnabled()
         compose.onNodeWithText("Stop").assertHasClickAction().assertIsEnabled()
-        compose.onNodeWithText("Transcription draft").assertExists()
+        compose.onNodeWithText("Voice transcription draft").assertExists()
         compose.onNodeWithText("Nothing is auto-sent.", substring = true).assertExists()
         assertEquals(0, compose.onAllNodesWithText("Approve", substring = false).fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun terminalModeEntryIsExplicitAccessibleAndOpensOnLiveTrustedConnection() {
+        val opens = mutableListOf<String>()
+        compose.setContent {
+            SessionTheme {
+                SessionDetailScreen(
+                    state = previewDetailState(),
+                    onEvent = {},
+                    onOpenTerminal = { opens += "opened" },
+                )
+            }
+        }
+
+        compose.onNodeWithText("Terminal compatibility mode").assertIsDisplayed()
+        compose.onNodeWithText("Terminal ready · direct").assertIsDisplayed()
+        compose.onNodeWithText("Terminal input is ephemeral and never replayed", substring = true).assertIsDisplayed()
+        compose.onNodeWithContentDescription(
+            "Open terminal compatibility mode on MacBook Pro over direct trusted, passkey-authenticated connection",
+        ).assertHasClickAction().assertIsEnabled().performSemanticsAction(SemanticsActions.OnClick)
+
+        assertEquals(listOf("opened"), opens)
+    }
+
+    @Test
+    fun terminalModeFailsClosedForOfflineCachedSession() {
+        val opens = mutableListOf<String>()
+        val detail = previewDetailState()
+        compose.setContent {
+            SessionTheme {
+                SessionDetailScreen(
+                    state = detail.copy(
+                        session = detail.session.copy(
+                            connection = ConnectionState.Disconnected(DisconnectReason.NETWORK_LOST),
+                        ),
+                    ),
+                    onEvent = {},
+                    onOpenTerminal = { opens += "opened" },
+                )
+            }
+        }
+
+        compose.onNodeWithText("Terminal unavailable").assertIsDisplayed()
+        compose.onNodeWithText("Cached offline session data cannot open a terminal.", substring = true).assertIsDisplayed()
+        compose.onNodeWithContentDescription(
+            "Terminal compatibility mode unavailable while showing cached offline session data",
+        ).assertIsNotEnabled()
+
+        assertEquals(emptyList<String>(), opens)
+    }
+
+    @Test
+    fun idleVoiceControlStartsDictation() {
+        val events = mutableListOf<SessionDetailEvent>()
+        compose.setContent {
+            SessionTheme {
+                SessionDetailScreen(previewDetailState(), onEvent = events::add)
+            }
+        }
+
+        compose.onNodeWithContentDescription("Start voice dictation")
+            .performScrollTo()
+            .performClick()
+
+        assertEquals(listOf(SessionDetailEvent.StartVoice), events)
     }
 
     @Test
@@ -89,6 +158,112 @@ class SessionScreensTest {
             .performScrollTo()
             .performSemanticsAction(SemanticsActions.OnClick)
         assertEquals(listOf(SessionDetailEvent.OpenVoicePermissionSettings), events)
+    }
+
+    @Test
+    fun capturingVoiceShowsBacklogAndAccessibleStopCancelControls() {
+        val events = mutableListOf<SessionDetailEvent>()
+        val detail = previewDetailState()
+        compose.setContent {
+            SessionTheme {
+                SessionDetailScreen(
+                    state = detail.copy(
+                        voice = VoiceCaptureUiState(
+                            targetSessionId = detail.session.metadata.id,
+                            phase = VoiceCaptureUiPhase.CAPTURING,
+                            queueDepth = 2,
+                            queuedAudioMilliseconds = 1_200,
+                        ),
+                    ),
+                    onEvent = events::add,
+                )
+            }
+        }
+
+        compose.onNodeWithText("Listening").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Audio backlog: 2 chunks; 1200 ms queued.")
+            .performScrollTo()
+            .assertIsDisplayed()
+        compose.onNodeWithContentDescription("Stop voice dictation and request a final transcription")
+            .performScrollTo()
+            .performClick()
+        compose.onNodeWithContentDescription("Cancel voice dictation and discard captured audio")
+            .performScrollTo()
+            .performClick()
+
+        assertEquals(
+            listOf(SessionDetailEvent.StopVoice, SessionDetailEvent.CancelVoice),
+            events,
+        )
+    }
+
+    @Test
+    fun finalTranscriptIsEditableAndNeverSendsOnItsOwn() {
+        val events = mutableListOf<SessionDetailEvent>()
+        val detail = previewDetailState()
+        compose.setContent {
+            SessionTheme {
+                SessionDetailScreen(
+                    state = detail.copy(
+                        session = detail.session.copy(
+                            draft = detail.session.draft.copy(
+                                typedText = "Keep this manual message",
+                                transcriptionText = "spoken final",
+                            ),
+                        ),
+                        voice = VoiceCaptureUiState(
+                            targetSessionId = detail.session.metadata.id,
+                            phase = VoiceCaptureUiPhase.PROCESSING,
+                            finalTranscriptReady = true,
+                        ),
+                    ),
+                    onEvent = events::add,
+                )
+            }
+        }
+
+        compose.onNodeWithText("Final transcription ready").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription("Editable final transcription draft")
+            .performScrollTo()
+            .performTextReplacement("edited final")
+        compose.onNodeWithContentDescription("Insert transcription into typed message draft without sending it")
+            .performScrollTo()
+            .performClick()
+        compose.onNodeWithContentDescription("Typed message draft")
+            .performScrollTo()
+            .assertTextContains("Keep this manual message")
+
+        assertEquals(1, events.count { it == SessionDetailEvent.UpdateTranscription("edited final") })
+        assertEquals(1, events.count { it == SessionDetailEvent.InsertTranscription })
+        assertEquals(0, events.count { it is SessionDetailEvent.UpdateTypedText || it is SessionDetailEvent.Send })
+    }
+
+    @Test
+    fun voiceErrorSurfacesHostQuotaTelemetryWithoutAnInventedBalance() {
+        val detail = previewDetailState()
+        compose.setContent {
+            SessionTheme {
+                SessionDetailScreen(
+                    state = detail.copy(
+                        voice = VoiceCaptureUiState(
+                            targetSessionId = detail.session.metadata.id,
+                            phase = VoiceCaptureUiPhase.FAILED,
+                            error = VoiceCaptureErrorUiState(
+                                title = "Voice limit reached",
+                                detail = "Daily voice budget",
+                                retryAfterMilliseconds = 60_000,
+                            ),
+                        ),
+                    ),
+                    onEvent = {},
+                )
+            }
+        }
+
+        compose.onNodeWithText("Voice limit reached").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Daily voice budget").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Retry after 1 minute.").performScrollTo().assertIsDisplayed()
+        compose.onAllNodesWithText("Balance", substring = true).assertCountEquals(0)
     }
 
     @Test

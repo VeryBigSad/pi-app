@@ -973,6 +973,8 @@ class PiAppCoordinator(
             SessionDetailEvent.Stop -> sendCommand(state, "abort")
             SessionDetailEvent.Attach -> Unit
             SessionDetailEvent.StartVoice -> startVoice(sessionId, permissionRetry = false)
+            SessionDetailEvent.StopVoice -> voicePort.stop()
+            SessionDetailEvent.CancelVoice -> voicePort.cancel()
             SessionDetailEvent.OpenVoicePermissionSettings -> Unit
 
             SessionDetailEvent.LoadOlder -> loadOlder(state)

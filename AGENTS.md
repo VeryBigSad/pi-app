@@ -123,7 +123,7 @@ No implementation change lands without tests at the layer that change lives in. 
 | Terminal | Deterministic xterm hashes; Chromium-91/API29 shim source locator; API29/34/36 canary and old-engine refusal; truecolor/OSC8/Unicode/resize/paste/mouse/keys; 5k/reconnect/history/renderer/isolation. |
 | Extensions | Invocation-level manifest for every known path; `/mcp`, `/usage`, `/agents`, `/btw`, `/llama` pre-route; unexpected-command watchdog restart/resync; semantic and PTY scenarios; explicit Node/fs non-sandbox test. |
 | Android instrumentation | Compose behavior, navigation, and accessibility semantics per screen. |
-| Performance | Release-build Macrobenchmark against the budgets in [docs/testing.md](docs/testing.md). Debug scrolling proves nothing. |
+| Performance | Pinned `:android:benchmark` Macrobenchmark/Baseline Profile harness targets profileable `benchmarkRelease`; emulator output is diagnostic only. Pixel 7-class-or-newer physical release evidence against [docs/testing.md](docs/testing.md) remains mandatory. Debug scrolling proves nothing. |
 | Supply chain | Locks/checksums, Pi tarball+patch hash/source locator, SBOM/SCA/licenses/secrets, signed package smoke. |
 | Manual | The emulator and physical-device matrices in [docs/testing.md](docs/testing.md), with sanitized artifacts attached. |
 

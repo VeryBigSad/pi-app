@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -18,15 +19,17 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import io.github.verybigsad.pimobile.model.TransportPath
 
 @Composable
 fun SessionDetailScreen(
     state: SessionDetailUiState,
     onEvent: (SessionDetailEvent) -> Unit,
+    onOpenTerminal: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.fillMaxSize()) {
-        SessionDetailTopBar(state, onEvent)
+        SessionDetailTopBar(state, onEvent, onOpenTerminal)
         when (val access = state.access) {
             is SessionContentAccess.Locked -> LockedDetail(state, access, onEvent)
             is SessionContentAccess.Offline -> AvailableDetail(state, access, onEvent)
@@ -49,6 +52,7 @@ fun SessionDetailScreen(
 private fun SessionDetailTopBar(
     state: SessionDetailUiState,
     onEvent: (SessionDetailEvent) -> Unit,
+    onOpenTerminal: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -84,7 +88,76 @@ private fun SessionDetailTopBar(
             thinkingLevel = state.thinkingLevel,
             elapsedLabel = state.elapsedLabel,
         )
+        TerminalModeEntry(state, onOpenTerminal)
     }
+}
+
+@Composable
+private fun TerminalModeEntry(
+    state: SessionDetailUiState,
+    onOpenTerminal: () -> Unit,
+) {
+    val availability = state.terminalModeAvailability
+    val available = availability as? TerminalModeAvailability.Available
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "Terminal compatibility mode",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.semantics { heading() },
+            )
+            StateChip(
+                label = available?.let { "Terminal ready · ${it.path.terminalPathLabel()}" } ?: "Terminal unavailable",
+                tone = if (available != null) StateTone.PRIMARY else StateTone.WARNING,
+            )
+            Text(
+                text = availability.supportingCopy(state.macDisplayName),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            CompactTextButton(
+                label = "Open terminal",
+                description = availability.actionDescription(state.macDisplayName),
+                onClick = onOpenTerminal,
+                enabled = available != null,
+            )
+        }
+    }
+}
+
+private fun TerminalModeAvailability.supportingCopy(macDisplayName: String): String = when (this) {
+    is TerminalModeAvailability.Available ->
+        "Interactive compatibility mode opens a terminal on $macDisplayName over the ${path.terminalPathLabel()} trusted, passkey-authenticated connection. Terminal input is ephemeral and never replayed after uncertain delivery."
+
+    is TerminalModeAvailability.Unavailable -> when (reason) {
+        TerminalModeUnavailableReason.OFFLINE_CACHE ->
+            "Cached offline session data cannot open a terminal. Reconnect and unlock with a passkey before using compatibility mode."
+
+        TerminalModeUnavailableReason.AUTHENTICATED_CONNECTION_REQUIRED ->
+            "Terminal mode requires a live trusted, passkey-authenticated connection to $macDisplayName. It stays unavailable until that connection is ready."
+    }
+}
+
+private fun TerminalModeAvailability.actionDescription(macDisplayName: String): String = when (this) {
+    is TerminalModeAvailability.Available ->
+        "Open terminal compatibility mode on $macDisplayName over ${path.terminalPathLabel()} trusted, passkey-authenticated connection"
+
+    is TerminalModeAvailability.Unavailable -> when (reason) {
+        TerminalModeUnavailableReason.OFFLINE_CACHE ->
+            "Terminal compatibility mode unavailable while showing cached offline session data"
+
+        TerminalModeUnavailableReason.AUTHENTICATED_CONNECTION_REQUIRED ->
+            "Terminal compatibility mode unavailable until a trusted, passkey-authenticated Mac connection is ready"
+    }
+}
+
+private fun TransportPath.terminalPathLabel(): String = when (this) {
+    TransportPath.DIRECT -> "direct"
+    TransportPath.RELAY -> "relayed"
 }
 
 @Composable
@@ -169,6 +242,7 @@ private fun AvailableDetail(
                             runState = state.session.conversation.runState,
                             commandNotice = state.commandNotice,
                             voicePermission = state.voicePermission,
+                            voice = state.voice,
                             enabled = state.canMutate,
                             onEvent = onEvent,
                         )
@@ -205,6 +279,7 @@ private fun AvailableDetail(
                     runState = state.session.conversation.runState,
                     commandNotice = state.commandNotice,
                     voicePermission = state.voicePermission,
+                    voice = state.voice,
                     enabled = state.canMutate,
                     onEvent = onEvent,
                 )

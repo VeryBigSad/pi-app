@@ -1,6 +1,6 @@
 # Pi Mobile 1.0 master plan
 
-Last updated: 2026-08-11
+Last updated: 2026-08-12
 Status: implementation complete across all planned modules; verification in progress. `npm run check` green (372 tests), Gradle aggregate green (545 unit test executions), API 29 instrumentation green (113 tests, `emulator-5590`). API 34+ lanes, no-Google lanes, Macrobenchmarks, cloud apply, and all physical-device gates remain open. Release and cloud apply stay NO-GO until the open gates in [requirements-traceability.md](requirements-traceability.md) close.
 
 ## Definition of done
@@ -38,7 +38,7 @@ Do not repeat stale claims that Android SDK/AVDs are absent or that the Groq key
 | 2 — semantic vertical slice | **Complete** | RPC facade, session inbox/timeline/composer/dialogs/approval sheet, agents insight screen, settings, delta assembly, raw projector, approval broker with 30/120/150 s boundaries, invocation pre-routing |
 | 3 — push, voice, release identity | **Mostly complete** | UnifiedPush client + opaque wake + catch-up workers; Groq VAD voice path with durable rate/cost ledger; DAL live + signed-APK identity match. Open: live opt-in Groq test, no-Google AVD lanes, physical Bitwarden/Doze/mic evidence |
 | 4 — terminal compatibility | **Complete on API 29 emulator** | Bundled xterm + node-pty + private tmux split input, history drawer, reconnect semantics; API 29 instrumentation green. Open: API 34/36 lanes, physical Gboard/Bluetooth input |
-| 5 — cloud, hardening, E2E, release | **Not started** | Terraform defined/hardened but never applied; no remote suites, no Macrobenchmarks, no physical manual evidence, no SBOM/release |
+| 5 — cloud, hardening, E2E, release | **Not started** | Terraform defined/hardened but never applied; Macrobenchmark/Baseline Profile harness exists but has no accepted measurement, no remote suites, no physical manual evidence, no SBOM/release |
 
 ## Fixed decisions
 

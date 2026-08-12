@@ -8,6 +8,9 @@ import io.github.verybigsad.pimobile.session.PasskeyProviderAvailability
 import io.github.verybigsad.pimobile.session.SessionBucket
 import io.github.verybigsad.pimobile.session.SessionDetailUiState
 import io.github.verybigsad.pimobile.session.SessionListItemUiState
+import io.github.verybigsad.pimobile.session.VoiceCaptureUiPhase
+import io.github.verybigsad.pimobile.session.VoiceCaptureUiState
+import io.github.verybigsad.pimobile.session.VoicePermissionUiState
 import io.github.verybigsad.pimobile.session.SessionListUiState
 import io.github.verybigsad.pimobile.session.displayLabel
 import io.github.verybigsad.pimobile.state.AppIntent
@@ -25,6 +28,9 @@ class MainViewModel(
     private val coordinator: PiAppCoordinator get() = container.coordinator
 
     val state: StateFlow<PiAppState> = coordinator.state
+
+    val voiceUiState: StateFlow<VoiceCaptureUiState?>
+        get() = container.voiceUiState
 
     val settingsState: StateFlow<io.github.verybigsad.pimobile.settings.SettingsUiState>
         get() = container.settingsProjection.state
@@ -77,10 +83,16 @@ class MainViewModel(
         isRefreshing = appState.syncing,
     )
 
-    fun detailUiState(appState: PiAppState, sessionId: SessionId, now: Long): SessionDetailUiState? {
+    fun detailUiState(
+        appState: PiAppState,
+        sessionId: SessionId,
+        now: Long,
+        voiceUiState: VoiceCaptureUiState? = container.voiceUiState.value,
+    ): SessionDetailUiState? {
         val session = appState.sessions[sessionId] ?: return null
         val macName = (appState.trust as? io.github.verybigsad.pimobile.model.TrustState.Trusted)?.macDisplayName ?: "Mac"
         val catalogEntry = appState.catalog?.get(sessionId)
+        val voicePermission = appState.voicePermissionNotices[sessionId]
         return SessionDetailUiState(
             session = session,
             passkeyProvider = appState.passkeyProvider.toUi(),
@@ -93,8 +105,30 @@ class MainViewModel(
             lastSyncedLabel = timeLabel(session.metadata.updatedAtEpochMillis, now),
             approvalOffer = appState.approval,
             commandNotice = appState.commandNotices[sessionId],
-            voicePermission = appState.voicePermissionNotices[sessionId],
+            voicePermission = voicePermission,
+            voice = resolveVoiceUiState(appState, sessionId, voicePermission, voiceUiState),
         )
+    }
+
+    private fun resolveVoiceUiState(
+        appState: PiAppState,
+        sessionId: SessionId,
+        voicePermission: VoicePermissionUiState?,
+        voiceUiState: VoiceCaptureUiState?,
+    ): VoiceCaptureUiState? = when {
+        appState.voicePermissionRequest?.targetSessionId == sessionId -> VoiceCaptureUiState(
+            targetSessionId = sessionId,
+            phase = VoiceCaptureUiPhase.REQUESTING_PERMISSION,
+        )
+
+        voicePermission != null -> VoiceCaptureUiState(
+            targetSessionId = sessionId,
+            phase = VoiceCaptureUiPhase.PERMISSION_DENIED,
+            canOpenPermissionSettings = voicePermission is VoicePermissionUiState.PermanentlyDenied,
+        )
+
+        voiceUiState?.targetSessionId == sessionId -> voiceUiState
+        else -> null
     }
 
     private fun bucket(runState: SessionRunState): SessionBucket = when (runState) {

@@ -10,6 +10,7 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import io.github.verybigsad.pimobile.model.SessionId
 import io.github.verybigsad.pimobile.pairing.PairingPasskeyPort
+import io.github.verybigsad.pimobile.session.VoiceCaptureUiState
 import io.github.verybigsad.pimobile.pairing.PairingRunner
 import io.github.verybigsad.pimobile.push.EndpointUploadResult
 import io.github.verybigsad.pimobile.push.LockedWakeNotifier
@@ -50,7 +51,9 @@ import io.github.verybigsad.pimobile.voice.AndroidAudioRecordSourceFactory
 import io.github.verybigsad.pimobile.voice.AndroidMicrophonePermissionSource
 import io.github.verybigsad.pimobile.voice.GatewayMacVoiceTransport
 import io.github.verybigsad.pimobile.voice.VoiceCaptureController
+import io.github.verybigsad.pimobile.voice.VoiceFrontendState
 import io.github.verybigsad.pimobile.voice.VoiceStartResult
+import io.github.verybigsad.pimobile.voice.toVoiceCaptureUiState
 import io.github.verybigsad.pimobile.voice.VoiceTranscriptSink
 import io.github.verybigsad.pimobile.voice.VoiceTranscriptGate
 import io.github.verybigsad.pimobile.wire.HostConnectionEvent
@@ -63,6 +66,10 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -158,6 +165,8 @@ class AppContainer(
         private set
 
     private val voiceTransport = GatewayMacVoiceTransport { activeConnector }
+    private val mutableVoiceUiState = MutableStateFlow<VoiceCaptureUiState?>(null)
+    val voiceUiState: StateFlow<VoiceCaptureUiState?> = mutableVoiceUiState.asStateFlow()
     private val coordinatorVoicePort = CoordinatorVoicePort()
 
     lateinit var coordinator: PiAppCoordinator
@@ -287,6 +296,7 @@ class AppContainer(
                 targetSessionId: String,
                 transcript: io.github.verybigsad.pimobile.voice.VoiceTranscript,
             ) {
+                coordinatorVoicePort.onFinalTranscript(SessionId(targetSessionId), transcript.sessionId)
                 coordinator.submit(AppIntent.VoiceTranscriptReceived(SessionId(targetSessionId), transcript))
             }
         }
@@ -429,14 +439,26 @@ class AppContainer(
     private inner class CoordinatorVoicePort : VoicePort {
         private var controller: VoiceCaptureController? = null
 
+        @Volatile
+        private var targetSessionId: SessionId? = null
+
+        @Volatile
+        private var pendingStartTargetSessionId: SessionId? = null
+
+        @Volatile
+        private var finalTranscriptStreamId: String? = null
+
         private fun controller(): VoiceCaptureController = controller ?: VoiceCaptureController(
             permissionSource = AndroidMicrophonePermissionSource(application),
             audioSourceFactory = AndroidAudioRecordSourceFactory(application),
             transport = voiceTransport,
             parentScope = scope,
-        ).also {
+        ).also { active ->
             voiceTranscriptSink()
-            controller = it
+            controller = active
+            scope.launch {
+                active.state.collect { state -> publish(state) }
+            }
         }
 
         override suspend fun setForeground(foreground: Boolean) {
@@ -446,13 +468,25 @@ class AppContainer(
                 transcriptGate?.cancel(streamId, voiceConnectionGeneration.get())
             }
             active?.setForeground(foreground)
+            active?.state?.value?.let(::publish)
         }
 
         override suspend fun start(targetSessionId: SessionId): String? {
             val active = controller()
-            val generation = voiceConnectionGeneration.get()
+            if (this.targetSessionId == null) {
+                pendingStartTargetSessionId = targetSessionId
+            }
             active.setForeground(true)
-            return when (active.start()) {
+            publish(active.state.value)
+            val result = active.start()
+            if (result != VoiceStartResult.ALREADY_ACTIVE) {
+                this.targetSessionId = targetSessionId
+                finalTranscriptStreamId = null
+            }
+            pendingStartTargetSessionId = null
+            publish(active.state.value)
+            val generation = voiceConnectionGeneration.get()
+            return when (result) {
                 VoiceStartResult.STARTED -> {
                     val streamId = active.state.value.sessionId
                     if (
@@ -460,11 +494,13 @@ class AppContainer(
                         voiceTranscriptSink().begin(streamId, targetSessionId.value, generation) != null
                     ) {
                         active.cancel()
+                        publish(active.state.value)
                         "VOICE_CONNECTION_CHANGED"
                     } else {
                         null
                     }
                 }
+
                 VoiceStartResult.PERMISSION_REQUIRED -> "VOICE_PERMISSION_REQUIRED"
                 VoiceStartResult.PERMISSION_DENIED -> "VOICE_PERMISSION_DENIED"
                 VoiceStartResult.NOT_FOREGROUND -> "VOICE_NOT_FOREGROUND"
@@ -473,20 +509,39 @@ class AppContainer(
         }
 
         override suspend fun stop() {
-            controller?.stop()
+            val active = controller ?: return
+            active.stop()
+            publish(active.state.value)
         }
 
         override suspend fun cancel() {
-            val active = controller
-            active?.state?.value?.sessionId?.let { streamId ->
+            val active = controller ?: return
+            active.state.value.sessionId?.let { streamId ->
                 transcriptGate?.cancel(streamId, voiceConnectionGeneration.get())
             }
-            active?.cancel()
+            active.cancel()
+            publish(active.state.value)
         }
 
         override suspend fun onMacError(sessionId: String, error: io.github.verybigsad.pimobile.voice.MacVoiceError) {
             transcriptGate?.cancel(sessionId, voiceConnectionGeneration.get())
             controller?.onMacError(sessionId, error)
+            controller?.state?.value?.let(::publish)
+        }
+
+        fun onFinalTranscript(targetSessionId: SessionId, streamId: String) {
+            val active = controller ?: return
+            if (this.targetSessionId != targetSessionId || active.state.value.sessionId != streamId) return
+            finalTranscriptStreamId = streamId
+            publish(active.state.value)
+        }
+
+        private fun publish(state: VoiceFrontendState) {
+            val target = targetSessionId ?: pendingStartTargetSessionId ?: return
+            mutableVoiceUiState.value = state.toVoiceCaptureUiState(
+                targetSessionId = target,
+                finalTranscriptReady = finalTranscriptStreamId == state.sessionId,
+            )
         }
     }
 

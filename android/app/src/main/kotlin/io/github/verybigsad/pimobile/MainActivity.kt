@@ -15,6 +15,8 @@ import androidx.activity.viewModels
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -42,6 +44,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private var activeVoicePermissionRequestId: Long? = null
+    private var benchmarkScenario: BenchmarkScenario? by mutableStateOf(null)
 
     private val voicePermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -65,48 +68,61 @@ class MainActivity : ComponentActivity() {
             null
         }
 
+        benchmarkScenario = BenchmarkScenario.fromIntent(intent)
         enableEdgeToEdge()
-        maybeRequestNotificationPermissionOnUpdateEnable()
-        handleIntent(intent)
+        if (benchmarkScenario == null) {
+            maybeRequestNotificationPermissionOnUpdateEnable()
+            handleIntent(intent)
+        }
         setContent {
-            val state by viewModel.state.collectAsState()
-            val voicePermissionRequest = state.voicePermissionRequest
-            LaunchedEffect(voicePermissionRequest?.requestId) {
-                val request = voicePermissionRequest ?: return@LaunchedEffect
-                if (
-                    activeVoicePermissionRequestId != request.requestId &&
-                    lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
-                ) {
-                    activeVoicePermissionRequestId = request.requestId
-                    voicePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                }
-            }
-            // Recents/thumbnails never show authenticated content.
-            val secure = state.trust is io.github.verybigsad.pimobile.model.TrustState.Trusted
-            if (secure) {
-                window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
+            val activeBenchmarkScenario = benchmarkScenario
+            if (activeBenchmarkScenario != null) {
+                BenchmarkTimelineScreen(activeBenchmarkScenario.runId)
             } else {
-                window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                val state by viewModel.state.collectAsState()
+                val voicePermissionRequest = state.voicePermissionRequest
+                LaunchedEffect(voicePermissionRequest?.requestId) {
+                    val request = voicePermissionRequest ?: return@LaunchedEffect
+                    if (
+                        activeVoicePermissionRequestId != request.requestId &&
+                        lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+                    ) {
+                        activeVoicePermissionRequestId = request.requestId
+                        voicePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    }
+                }
+                // Recents/thumbnails never show authenticated content.
+                val secure = state.trust is io.github.verybigsad.pimobile.model.TrustState.Trusted
+                if (secure) {
+                    window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
+                } else {
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                }
+                PiAppRoot(viewModel, activityActions())
             }
-            PiAppRoot(viewModel, activityActions())
         }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        handleIntent(intent)
+        benchmarkScenario = BenchmarkScenario.fromIntent(intent)
+        if (benchmarkScenario == null) handleIntent(intent)
     }
 
     override fun onResume() {
         super.onResume()
-        (application as PiMobileApplication).passkeyBridge.attach(this)
-        container.notificationPermission.refresh()
-        container.refreshPasskeyAvailability()
+        if (benchmarkScenario == null) {
+            (application as PiMobileApplication).passkeyBridge.attach(this)
+            container.notificationPermission.refresh()
+            container.refreshPasskeyAvailability()
+        }
     }
 
     override fun onPause() {
-        activeVoicePermissionRequestId?.let { viewModel.submit(AppIntent.VoicePermissionCancelled(it)) }
-        (application as PiMobileApplication).passkeyBridge.detach(this)
+        if (benchmarkScenario == null) {
+            activeVoicePermissionRequestId?.let { viewModel.submit(AppIntent.VoicePermissionCancelled(it)) }
+            (application as PiMobileApplication).passkeyBridge.detach(this)
+        }
         super.onPause()
     }
 
@@ -192,7 +208,25 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_SESSION_ID = "io.github.verybigsad.pimobile.extra.SESSION_ID"
+        internal const val EXTRA_BENCHMARK_SCENARIO = "io.github.verybigsad.pimobile.extra.BENCHMARK_SCENARIO"
+        internal const val EXTRA_BENCHMARK_RUN_ID = "io.github.verybigsad.pimobile.extra.BENCHMARK_RUN_ID"
         private const val VOICE_PERMISSION_REQUEST_ID = "voice_permission_request_id"
         private const val NO_VOICE_PERMISSION_REQUEST = Long.MIN_VALUE
     }
 }
+
+internal data class BenchmarkScenario(
+    val runId: Long,
+) {
+    companion object {
+        fun fromIntent(intent: Intent): BenchmarkScenario? {
+            if (!isBenchmarkHarnessBuildType(BuildConfig.BUILD_TYPE)) return null
+            if (intent.getStringExtra(MainActivity.EXTRA_BENCHMARK_SCENARIO) != "large_timeline") return null
+            val runId = intent.getLongExtra(MainActivity.EXTRA_BENCHMARK_RUN_ID, Long.MIN_VALUE)
+            return runId.takeIf { it > 0L }?.let(::BenchmarkScenario)
+        }
+    }
+}
+
+internal fun isBenchmarkHarnessBuildType(buildType: String): Boolean =
+    buildType == "benchmarkRelease" || buildType == "nonMinifiedRelease"

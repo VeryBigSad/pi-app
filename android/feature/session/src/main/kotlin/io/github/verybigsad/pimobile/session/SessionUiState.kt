@@ -100,6 +100,51 @@ sealed interface VoicePermissionUiState {
     data object PermanentlyDenied : VoicePermissionUiState
 }
 
+enum class VoiceCaptureUiPhase {
+    IDLE,
+    REQUESTING_PERMISSION,
+    PERMISSION_REQUIRED,
+    PERMISSION_DENIED,
+    STARTING,
+    CAPTURING,
+    PROCESSING,
+    CANCELING,
+    CANCELED,
+    FAILED,
+    CLOSED,
+}
+
+@Immutable
+data class VoiceCaptureErrorUiState(
+    val title: String,
+    val detail: String? = null,
+    val retryAfterMilliseconds: Long? = null,
+    val resetAtEpochMilliseconds: Long? = null,
+) {
+    init {
+        require(title.isNotBlank())
+        require(detail == null || detail.isNotBlank())
+        require(retryAfterMilliseconds == null || retryAfterMilliseconds >= 0)
+        require(resetAtEpochMilliseconds == null || resetAtEpochMilliseconds >= 0)
+    }
+}
+
+@Immutable
+data class VoiceCaptureUiState(
+    val targetSessionId: SessionId,
+    val phase: VoiceCaptureUiPhase,
+    val queueDepth: Int = 0,
+    val queuedAudioMilliseconds: Int = 0,
+    val error: VoiceCaptureErrorUiState? = null,
+    val finalTranscriptReady: Boolean = false,
+    val canOpenPermissionSettings: Boolean = false,
+) {
+    init {
+        require(queueDepth >= 0)
+        require(queuedAudioMilliseconds >= 0)
+    }
+}
+
 sealed interface CommandNoticeUiState {
     data object Sending : CommandNoticeUiState
 
@@ -130,6 +175,7 @@ data class SessionDetailUiState(
     val approvalNotice: ApprovalNoticeUiState? = null,
     val commandNotice: CommandNoticeUiState? = null,
     val voicePermission: VoicePermissionUiState? = null,
+    val voice: VoiceCaptureUiState? = null,
 ) {
     init {
         require(nowEpochMillis >= 0)
@@ -149,6 +195,29 @@ data class SessionDetailUiState(
     val canMutate: Boolean
         get() = access is SessionContentAccess.Online &&
             session.conversation.availability is CanonicalAvailability.Current
+
+    val terminalModeAvailability: TerminalModeAvailability
+        get() = when (val currentAccess = access) {
+            is SessionContentAccess.Online -> TerminalModeAvailability.Available(currentAccess.path)
+            is SessionContentAccess.Offline -> TerminalModeAvailability.Unavailable(
+                TerminalModeUnavailableReason.OFFLINE_CACHE,
+            )
+            is SessionContentAccess.Locked -> TerminalModeAvailability.Unavailable(
+                TerminalModeUnavailableReason.AUTHENTICATED_CONNECTION_REQUIRED,
+            )
+        }
+}
+
+@Immutable
+sealed interface TerminalModeAvailability {
+    data class Available(val path: TransportPath) : TerminalModeAvailability
+
+    data class Unavailable(val reason: TerminalModeUnavailableReason) : TerminalModeAvailability
+}
+
+enum class TerminalModeUnavailableReason {
+    OFFLINE_CACHE,
+    AUTHENTICATED_CONNECTION_REQUIRED,
 }
 
 @Immutable
@@ -251,6 +320,8 @@ sealed interface SessionDetailEvent {
     data object QueueFollowUp : SessionDetailEvent
     data object Attach : SessionDetailEvent
     data object StartVoice : SessionDetailEvent
+    data object StopVoice : SessionDetailEvent
+    data object CancelVoice : SessionDetailEvent
     data object OpenVoicePermissionSettings : SessionDetailEvent
     data object InsertTranscription : SessionDetailEvent
     data object DiscardTranscription : SessionDetailEvent
