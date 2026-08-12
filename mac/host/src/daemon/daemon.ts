@@ -184,6 +184,7 @@ export class HostDaemon {
     this.sessions = new SessionService({
       supervisor,
       sessionsDirectory: join(this.layout.dataDirectory, "sessions"),
+      canonicalStorePath: join(this.layout.dataDirectory, "canonical.sqlite"),
       onSettlement: (notice) => this.onSettlement(notice),
       onAppend: (append) => this.onSessionAppend(append),
       onAgentsUpdate: (notice) => this.onAgentsUpdate(notice),

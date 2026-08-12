@@ -21,6 +21,9 @@ class UpdateInstallController(private val context: Context, private val store: U
         if (snapshot.authorizedVersionCode != candidate.versionCode) {
             throw UpdateException(UpdateError.AUTHORIZATION_MISMATCH, "install not authorized for ${candidate.versionCode}")
         }
+        // Verify BEFORE createSession so a rejected candidate never allocates a
+        // PackageInstaller session (abandonment is asynchronous on some API levels).
+        reverifyCandidateBytes(candidate, apkFile)
         val installer = context.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
             setAppPackageName(UpdateConfig.PACKAGE_NAME)
@@ -33,7 +36,7 @@ class UpdateInstallController(private val context: Context, private val store: U
         }
         try {
             installer.openSession(sessionId).use { session ->
-                // TOCTOU close: re-hash bytes and re-verify the signer pin immediately before write.
+                // Second verification immediately before write closes the TOCTOU window.
                 reverifyCandidateBytes(candidate, apkFile)
                 session.openWrite("base.apk", 0, candidate.apkSizeBytes).use { out ->
                     apkFile.inputStream().buffered().use { it.copyTo(out) }

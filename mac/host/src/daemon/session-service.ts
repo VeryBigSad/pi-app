@@ -17,7 +17,8 @@ import { AgentTracker, type TrackedAgent } from "../pi/agent-tracker.js";
 import { LifecycleTracker } from "../pi/lifecycle.js";
 import type { PiJsonRecord } from "../pi/lf-json-framer.js";
 import type { RuntimeSession, RuntimeSupervisor } from "../runtime/supervisor.js";
-import type { EntriesResponse, SnapshotSource } from "../sync/canonical-snapshot.js";
+import type { EntriesResponse, SessionEntry, SnapshotSource } from "../sync/canonical-snapshot.js";
+import { CanonicalStore, canonicalRecordKey, type CanonicalStoredRecord } from "../sync/canonical-store.js";
 
 const ALLOWED_OPERATIONS = new Set(["prompt", "steer", "follow_up", "abort", "get_state", "new_session"]);
 const IDLE_POLL_MS = 100;
@@ -49,6 +50,8 @@ export interface AgentUpdateNotice {
 interface SessionActorOptions {
   readonly sessionId: string;
   readonly cwd: string;
+  /** Durable canonical log; when present the actor restores epoch/sequence from it and persists before publishing. */
+  readonly canonicalStore?: CanonicalStore;
   readonly onSettlement: (notice: SettlementNotice) => void;
   readonly onAppend?: (append: SessionAppend) => void;
   readonly onAgentsUpdate?: (notice: AgentUpdateNotice) => void;
@@ -63,8 +66,8 @@ class SessionActor {
 
   private readonly lifecycle = new LifecycleTracker();
   private readonly agents = new AgentTracker();
-  private readonly streamEpoch = randomUUID();
-  private sequence = 0n;
+  private readonly streamEpoch: string;
+  private sequence: bigint;
   private generation = 0;
   private tail: Promise<unknown> = Promise.resolve();
   private child: RuntimeSession | undefined;
@@ -72,7 +75,19 @@ class SessionActor {
   constructor(
     private readonly supervisor: RuntimeSupervisor,
     private readonly options: SessionActorOptions,
-  ) {}
+  ) {
+    const store = options.canonicalStore;
+    if (store !== undefined) {
+      // Actor identity is the sessionId: restore the durable epoch and high-water
+      // sequence; a daemon restart never rotates the stream epoch.
+      const state = store.ensureSession(options.sessionId, randomUUID());
+      this.streamEpoch = state.streamEpoch;
+      this.sequence = BigInt(state.nextSequence) - 1n;
+    } else {
+      this.streamEpoch = randomUUID();
+      this.sequence = 0n;
+    }
+  }
 
   get currentGeneration(): number {
     return this.generation;
@@ -104,19 +119,38 @@ class SessionActor {
   }
 
   private onRecord(record: PiJsonRecord): void {
-    this.sequence += 1n;
     // Synthetic runtimes may omit rawBytes/rawJson despite the type; derive them.
     const runtime = record as { rawBytes?: Buffer; rawJson?: string; value: Readonly<Record<string, unknown>> };
     const normalized: PiJsonRecord = runtime.rawBytes === undefined || runtime.rawJson === undefined
       ? { rawBytes: Buffer.from(JSON.stringify(record.value), "utf8"), rawJson: JSON.stringify(record.value), value: record.value }
       : record;
+    const projected = projectPiRecord(normalized);
+    const store = this.options.canonicalStore;
+    if (store !== undefined) {
+      // Persist-first ordering: a crash here loses the publish, never the record.
+      // A Pi child respawn replays history; already-persisted records are skipped
+      // without advancing the sequence or re-publishing.
+      const result = store.append({
+        sessionId: this.options.sessionId,
+        streamEpoch: this.streamEpoch,
+        recordKey: canonicalRecordKey(normalized.value, projected.rawSha256),
+        rawJson: projected.rawJson,
+        rawSha256: projected.rawSha256,
+        piType: projected.piType,
+        projectionJson: JSON.stringify(projected.projection.value),
+      });
+      if (!result.inserted) return;
+      this.sequence = BigInt(result.sequence);
+    } else {
+      this.sequence += 1n;
+    }
     this.options.onAppend?.({
       appendId: randomUUID(),
       sessionId: this.options.sessionId,
       streamEpoch: this.streamEpoch,
       sequence: this.sequence.toString(),
       record: normalized.value,
-      projected: projectPiRecord(normalized),
+      projected,
     });
     const changedAgent = this.agents.apply(record.value);
     if (changedAgent !== undefined) {
@@ -163,10 +197,22 @@ class SessionActor {
   }
 }
 
+function storedRecordToEntry(record: CanonicalStoredRecord): SessionEntry {
+  const parsed: unknown = JSON.parse(record.rawJson);
+  if (isJsonObject(parsed)) {
+    const id = parsed["id"];
+    return { ...parsed, id: typeof id === "string" && id.length > 0 ? id : `seq-${record.sequence}` };
+  }
+  return { id: `seq-${record.sequence}`, value: parsed as SessionEntry["id"] };
+}
+
 class PiSnapshotSource implements SnapshotSource {
   private barrierChild: RuntimeSession | undefined;
 
-  constructor(private readonly actor: SessionActor) {}
+  constructor(
+    private readonly actor: SessionActor,
+    private readonly canonicalStore?: CanonicalStore,
+  ) {}
 
   withMutationBarrier<T>(operation: () => Promise<T>): Promise<T> {
     return this.actor.serialize(async (child) => {
@@ -194,6 +240,15 @@ class PiSnapshotSource implements SnapshotSource {
   }
 
   private async queryEntries(child: RuntimeSession, since?: string): Promise<EntriesResponse> {
+    const store = this.canonicalStore;
+    if (store !== undefined) {
+      // Durable canonical log is authoritative; it survives daemon restarts and
+      // does not depend on what the (possibly freshly respawned) Pi child holds.
+      const entries = store.records(this.actor.sessionId, this.actor.currentStreamEpoch).map(storedRecordToEntry);
+      if (since === undefined) return { entries, leafId: null };
+      const index = entries.findIndex((entry) => entry.id === since);
+      return { entries: index < 0 ? entries : entries.slice(index + 1), leafId: null };
+    }
     const command: Record<string, unknown> = { type: "get_entries" };
     if (since !== undefined) command["since"] = since;
     const response = await child.call(command);
@@ -218,6 +273,8 @@ class PiSnapshotSource implements SnapshotSource {
 export interface SessionServiceOptions {
   readonly supervisor: RuntimeSupervisor;
   readonly sessionsDirectory: string;
+  /** Path to the durable canonical record log (SQLite); when set, epochs/sequences/records survive daemon restarts. */
+  readonly canonicalStorePath?: string;
   readonly onSettlement: (notice: SettlementNotice) => void;
   readonly onAppend?: (append: SessionAppend) => void;
   readonly onAgentsUpdate?: (notice: AgentUpdateNotice) => void;
@@ -232,17 +289,31 @@ export interface SessionServiceOptions {
  */
 export class SessionService implements CommandPathRouter, CommandAuthorizer, SyncRuntime {
   private readonly actors = new Map<string, SessionActor>();
+  private readonly canonicalStore: CanonicalStore | undefined;
 
-  constructor(private readonly options: SessionServiceOptions) {}
+  constructor(private readonly options: SessionServiceOptions) {
+    // Fail closed: a corrupt canonical log aborts construction rather than
+    // silently restarting history with a fresh epoch.
+    this.canonicalStore = options.canonicalStorePath === undefined
+      ? undefined
+      : new CanonicalStore(options.canonicalStorePath);
+  }
 
   /** Rehydrates actors for session directories left by previous daemon runs (lazy Pi spawn). */
   async rehydrate(signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();
+    const known = new Set<string>();
     const entries = await readdir(this.options.sessionsDirectory, { withFileTypes: true }).catch(() => [] as never[]);
     for (const entry of entries) {
       if (entry.isDirectory() && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(entry.name)) {
-        await this.actor(entry.name);
+        known.add(entry.name);
       }
+    }
+    for (const state of this.canonicalStore?.listSessions() ?? []) {
+      known.add(state.sessionId);
+    }
+    for (const sessionId of known) {
+      await this.actor(sessionId);
     }
   }
 
@@ -257,6 +328,7 @@ export class SessionService implements CommandPathRouter, CommandAuthorizer, Syn
     const actor = new SessionActor(this.options.supervisor, {
       sessionId,
       cwd,
+      ...(this.canonicalStore === undefined ? {} : { canonicalStore: this.canonicalStore }),
       onSettlement: this.options.onSettlement,
       ...(this.options.onAppend === undefined ? {} : { onAppend: this.options.onAppend }),
       ...(this.options.onAgentsUpdate === undefined ? {} : { onAgentsUpdate: this.options.onAgentsUpdate }),
@@ -334,7 +406,7 @@ export class SessionService implements CommandPathRouter, CommandAuthorizer, Syn
       kind: "snapshot",
       sessionId,
       streamEpoch: resume["streamEpoch"] as string,
-      source: new PiSnapshotSource(actor),
+      source: new PiSnapshotSource(actor, this.canonicalStore),
       catalog,
       agentsCatalog: { sessionId, agents: actor.agentsCatalog() as unknown as JsonObject[] },
     };
@@ -377,6 +449,7 @@ export class SessionService implements CommandPathRouter, CommandAuthorizer, Syn
     const actors = [...this.actors.values()];
     this.actors.clear();
     await Promise.allSettled(actors.map(async (actor) => actor.stop()));
+    this.canonicalStore?.close();
   }
 }
 
