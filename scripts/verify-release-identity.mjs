@@ -36,7 +36,7 @@ export function parseSignerOutput(output) {
   if (signerCount !== "1" || certificateLines.length !== 1) {
     throw new Error(`expected exactly one signer certificate, got signers=${signerCount ?? "unknown"}, certificates=${certificateLines.length}`);
   }
-  const digest = /^Signer #1 certificate SHA-256 digest: ([0-9a-f]{64})$/u.exec(certificateLines[0])?.[1];
+  const digest = /^Signer #1 certificate SHA-256 digest:\s*([0-9a-f]{64})$/iu.exec(certificateLines[0])?.[1]?.toLowerCase();
   if (digest === undefined) throw new Error("unexpected signer certificate output");
   const v2 = lines.includes("Verified using v2 scheme (APK Signature Scheme v2): true");
   const v3 = lines.includes("Verified using v3 scheme (APK Signature Scheme v3): true");

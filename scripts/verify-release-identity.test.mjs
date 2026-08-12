@@ -53,6 +53,12 @@ describe("parseSignerOutput", () => {
     );
   });
 
+  it("accepts uppercase digest and variable field spacing", () => {
+    expect(parseSignerOutput(signerOutput.replace(`: ${digest}`, `:   ${digest.toUpperCase()}`))).toBe(
+      "CC:36:66:F3:77:CE:4C:2B:D6:CE:19:A4:7F:3A:BE:47:19:AC:04:0F:D6:4F:FB:11:9F:02:E9:AC:4B:DD:D4:FE",
+    );
+  });
+
   it("rejects multiple signers", () => {
     const output = `${signerOutput.replace("Number of signers: 1", "Number of signers: 2")}Signer #2 certificate SHA-256 digest: ${"a".repeat(64)}\n`;
     expect(() => parseSignerOutput(output)).toThrow("exactly one");
