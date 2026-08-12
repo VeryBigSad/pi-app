@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { accessSync, constants, readdirSync } from "node:fs";
+import { accessSync, constants } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 export const PACKAGE_NAME = "io.github.verybigsad.pimobile";
 const SHA256_HEX = /^[0-9a-f]{64}$/u;
 const FINGERPRINT = /^([0-9A-F]{2}:){31}[0-9A-F]{2}$/u;
+const ANDROID_BUILD_TOOLS_VERSION = "36.0.0";
 
 export function parseProperties(text) {
   const values = new Map();
@@ -36,8 +37,9 @@ export function parseSignerOutput(output) {
   if (signerCount !== "1" || certificateLines.length !== 1) {
     throw new Error(`expected exactly one signer certificate, got signers=${signerCount ?? "unknown"}, certificates=${certificateLines.length}`);
   }
-  const digest = /^Signer #1 certificate SHA-256 digest:\s*([0-9a-f]{64})$/iu.exec(certificateLines[0])?.[1]?.toLowerCase();
-  if (digest === undefined) throw new Error("unexpected signer certificate output");
+  const digestText = /^Signer #1 certificate SHA-256 digest:\s*(.+)$/iu.exec(certificateLines[0])?.[1];
+  const digest = digestText?.replaceAll(":", "").replaceAll(/\s/gu, "").toLowerCase();
+  if (digest === undefined || !SHA256_HEX.test(digest)) throw new Error("unexpected signer certificate output");
   const v2 = lines.includes("Verified using v2 scheme (APK Signature Scheme v2): true");
   const v3 = lines.includes("Verified using v3 scheme (APK Signature Scheme v3): true");
   if (!v2 && !v3) throw new Error("APK has neither a verified v2 nor v3 signature");
@@ -80,20 +82,9 @@ function locateTool(name) {
   if (override !== undefined && executable(override)) return override;
   const sdk = process.env.ANDROID_SDK_ROOT ?? process.env.ANDROID_HOME;
   if (name === "apksigner" && sdk !== undefined) {
-    const directory = join(sdk, "build-tools");
-    let versions = [];
-    try {
-      versions = readdirSync(directory, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory() && /^\d+\.\d+\.\d+$/u.test(entry.name))
-        .map((entry) => entry.name)
-        .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
-    } catch {
-      versions = [];
-    }
-    for (const version of versions) {
-      const candidate = join(directory, version, name);
-      if (executable(candidate)) return candidate;
-    }
+    const candidate = join(sdk, "build-tools", ANDROID_BUILD_TOOLS_VERSION, name);
+    if (executable(candidate)) return candidate;
+    throw new Error(`${name} ${ANDROID_BUILD_TOOLS_VERSION} not found`);
   }
   try {
     return execFileSync("which", [name], { encoding: "utf8" }).trim();

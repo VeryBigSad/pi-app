@@ -53,10 +53,18 @@ describe("parseSignerOutput", () => {
     );
   });
 
-  it("accepts uppercase digest and variable field spacing", () => {
-    expect(parseSignerOutput(signerOutput.replace(`: ${digest}`, `:   ${digest.toUpperCase()}`))).toBe(
+  it.each([
+    `   ${digest.toUpperCase()}`,
+    digest.toUpperCase().match(/.{2}/gu).join(":"),
+    ` ${digest.match(/.{2}/gu).join(": ")} `,
+  ])("accepts platform digest rendering %j", (renderedDigest) => {
+    expect(parseSignerOutput(signerOutput.replace(digest, renderedDigest))).toBe(
       "CC:36:66:F3:77:CE:4C:2B:D6:CE:19:A4:7F:3A:BE:47:19:AC:04:0F:D6:4F:FB:11:9F:02:E9:AC:4B:DD:D4:FE",
     );
+  });
+
+  it.each(["not-a-digest", `${digest}00`, digest.slice(0, -2)])("rejects malformed rendered digest %j", (renderedDigest) => {
+    expect(() => parseSignerOutput(signerOutput.replace(digest, renderedDigest))).toThrow("unexpected signer");
   });
 
   it("rejects multiple signers", () => {
