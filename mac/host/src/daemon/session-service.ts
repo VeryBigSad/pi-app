@@ -203,7 +203,7 @@ function storedRecordToEntry(record: CanonicalStoredRecord): SessionEntry {
     const id = parsed["id"];
     return { ...parsed, id: typeof id === "string" && id.length > 0 ? id : `seq-${record.sequence}` };
   }
-  return { id: `seq-${record.sequence}`, value: parsed as SessionEntry["id"] };
+  return { id: `seq-${record.sequence}`, value: parsed };
 }
 
 class PiSnapshotSource implements SnapshotSource {
