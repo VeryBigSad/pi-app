@@ -94,10 +94,18 @@ internal class HostInboundRouter(
                 val leafId = body.string("leafId")?.takeIf { Regex("^[0-9a-f]{8}$").matches(it) }
                     ?.let(::LeafId)
                 val cursor = EventCursor(assembly.epoch, assembly.sequence, leafId)
-                val messages = assembly.entries.mapIndexedNotNull { index, entry ->
+                // Host snapshots include non-message meta records (model_change,
+                // thinking_level_change, …): they carry no content and are skipped.
+                val contentEntries = assembly.entries.filter { it["content"] != null }
+                val messages = contentEntries.mapIndexedNotNull { index, entry ->
                     snapshotEntry(sessionId, entry, index)
                 }
-                if (messages.size != assembly.entries.size) {
+                if (messages.size != contentEntries.size) {
+                    android.util.Log.w(
+                        "HostInboundRouter",
+                        "snapshot entries unmapped: ${assembly.entries.size - messages.size}/${assembly.entries.size} " +
+                            "types=${assembly.entries.map { it.string("type") ?: "?" }.distinct().take(8)}",
+                    )
                     onEvent(HostConnectionEvent.HostError("SNAPSHOT_ENTRY_INVALID", false))
                     return
                 }

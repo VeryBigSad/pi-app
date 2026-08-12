@@ -195,6 +195,7 @@ class GatewayConnectionImpl implements GatewayConnection {
     }
     this.sync = new CanonicalSyncSequencer(options.sync, async (type, body, replyTo) => {
       if (this.currentPhase !== "SYNCING" || this.syncController === undefined) throw new GatewayRuntimeError("AUTH_REQUIRED", "Synchronization authorization expired");
+      logWarn("gateway", `sync send ${type}`);
       await this.send(type, body, replyTo, this.syncController.signal);
     });
     this.streams = new ContentStreamManager(

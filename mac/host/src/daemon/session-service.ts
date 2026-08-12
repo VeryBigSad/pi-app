@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { isJsonObject, type JsonObject, type JsonValue } from "@pimobile/protocol";
 import type {
@@ -225,6 +225,17 @@ export class SessionService implements CommandPathRouter, CommandAuthorizer, Syn
   private readonly actors = new Map<string, SessionActor>();
 
   constructor(private readonly options: SessionServiceOptions) {}
+
+  /** Rehydrates actors for session directories left by previous daemon runs (lazy Pi spawn). */
+  async rehydrate(signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted();
+    const entries = await readdir(this.options.sessionsDirectory, { withFileTypes: true }).catch(() => [] as never[]);
+    for (const entry of entries) {
+      if (entry.isDirectory() && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(entry.name)) {
+        await this.actor(entry.name);
+      }
+    }
+  }
 
   async actor(sessionId: string): Promise<SessionActor> {
     const existing = this.actors.get(sessionId);

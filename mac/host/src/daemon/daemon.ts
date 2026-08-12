@@ -195,6 +195,7 @@ export class HostDaemon {
         }).catch((error: unknown) => logError("catalog", "publish session catalog", error));
       },
     });
+    await this.sessions.rehydrate(AbortSignal.timeout(10_000));
 
     const terminalResult = await createLocalTerminalBackend({ runtimeParent: this.layout.terminalRuntimeParent });
     if (terminalResult.state === "supported") this.terminalBackend = terminalResult.backend;
