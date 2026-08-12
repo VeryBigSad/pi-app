@@ -170,12 +170,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
         run: |
-          release_url=$(gh release create "$RELEASE_TAG" \
+          gh release create "$RELEASE_TAG" \
             "$APK_PATH#app-release.apk" "$RUNNER_TEMP/update-v1.json#update-v1.json" \
             --repo "$GH_REPO" --target "$GITHUB_SHA" --draft \
-            --title "$RELEASE_TAG" --notes "Pi Mobile $RELEASE_TAG (anonymous APK mirror)")
-          release_id=${release_url##*/}
-          [[ "$release_id" =~ ^[1-9][0-9]*$ ]] || { echo "draft release id missing"; exit 1; }
+            --title "$RELEASE_TAG" --notes "Pi Mobile $RELEASE_TAG (anonymous APK mirror)" >/dev/null
+          release_json=$(gh api "repos/$GH_REPO/releases?per_page=100")
+          release_id=$(jq -r --arg tag "$RELEASE_TAG" --arg sha "$GITHUB_SHA" \
+            '[.[] | select(.draft == true and .tag_name == $tag and .target_commitish == $sha)] | if length == 1 then .[0].id else empty end' \
+            <<<"$release_json")
+          [[ "$release_id" =~ ^[1-9][0-9]*$ ]] || { echo "unique draft release id missing"; exit 1; }
           echo "RELEASE_ID=$release_id" >> "$GITHUB_ENV"
 
       - name: Verify draft assets before irreversible publication
