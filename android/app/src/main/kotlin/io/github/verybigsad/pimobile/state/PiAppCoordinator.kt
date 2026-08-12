@@ -453,8 +453,9 @@ class PiAppCoordinator(
     private suspend fun onSnapshot(event: HostConnectionEvent.SnapshotReady, now: Long) {
         val existing = mutableState.value.sessions[event.sessionId]
         val metadata = StorageMappers.sessionMetadata(event.session, (mutableState.value.trust as? TrustState.Trusted)?.macId ?: MacId("unknown"))
-        val base = existing ?: SessionState.initial(metadata).let {
-            SessionReducer.reduce(it, SessionAction.TrustChanged(mutableState.value.trust), now)
+        val base = existing ?: SessionState.initial(metadata).let { initial ->
+            val trusted = SessionReducer.reduce(initial, SessionAction.TrustChanged(mutableState.value.trust), now)
+            SessionReducer.reduce(trusted, SessionAction.ConnectionChanged(mutableState.value.connection), now)
         }
         val snapshot = io.github.verybigsad.pimobile.model.CanonicalSnapshot(
             sessionId = event.sessionId,
@@ -820,7 +821,7 @@ class PiAppCoordinator(
             SessionDetailEvent.Send -> sendCommand(state, "prompt")
             SessionDetailEvent.SteerNow -> sendCommand(state, "steer")
             SessionDetailEvent.QueueFollowUp -> sendCommand(state, "follow_up")
-            SessionDetailEvent.Stop -> sendCommand(state, "interrupt")
+            SessionDetailEvent.Stop -> sendCommand(state, "abort")
             SessionDetailEvent.Attach -> Unit
             SessionDetailEvent.StartVoice -> voicePort.start()?.let { code ->
                 update { it.copy(lastError = code) }
@@ -921,8 +922,9 @@ class PiAppCoordinator(
         if (mutableState.value.connection !is ConnectionState.Ready) return
         if (state.conversation.availability !is CanonicalAvailability.Current) return
         val text = state.draft.typedText
-        if (operation != "interrupt" && text.isBlank()) return
-        val payload = buildJsonObject { put("text", text) }
+        if (operation != "abort" && text.isBlank()) return
+        // Pi RPC prompt body field is `message` (docs/protocol-v1.md command.submit contract).
+        val payload = buildJsonObject { put("message", text) }
         val hash = io.github.verybigsad.pimobile.protocol.commandPayloadHash(
             state.metadata.id.value,
             operation,
@@ -935,7 +937,7 @@ class PiAppCoordinator(
                 WireMessages.commandSubmit(commandId, state.metadata.id, operation, payload, hash),
             )
         }.onSuccess {
-            if (operation != "interrupt") {
+            if (operation != "abort") {
                 mutateDraft(state) { DraftAction.Clear(it.revision, clock.nowEpochMillis()) }
             }
         }.onFailure {

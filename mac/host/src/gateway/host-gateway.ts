@@ -546,11 +546,16 @@ class GatewayConnectionImpl implements GatewayConnection {
       authorizationGeneration,
       authorized: () => this.currentPhase === "READY" && this.authorizationGeneration === authorizationGeneration && this.user === user && !commandController.signal.aborted,
     };
+    logWarn("gateway", `command.submit received`);
     void this.commands.submit(message.body, context, commandController.signal).then(async (outcome) => {
+      logWarn("gateway", `command outcome state=${outcome.record.state}`);
       if (this.controller.signal.aborted || !context.authorized()) return;
       const type = outcome.record.state === "ACKED" ? "command.result" : "command.state";
       await this.send(type, commandStateBody(outcome.record), message.messageId);
-    }).catch(async (error: unknown) => this.respondFailure(error, message.messageId)).finally(() => {
+    }).catch(async (error: unknown) => {
+      logError("gateway", "command dispatch", error);
+      await this.respondFailure(error, message.messageId);
+    }).finally(() => {
       this.commandControllers.delete(commandController);
     });
   }

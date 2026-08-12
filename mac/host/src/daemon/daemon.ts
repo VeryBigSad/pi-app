@@ -349,12 +349,22 @@ export class HostDaemon {
   }
 
   private onSessionAppend(append: SessionAppend): void {
+    logWarn("session", `append session=${append.sessionId} seq=${append.sequence}`);
+    const projected = append.projected;
     this.gateway?.publishToReady("message.append", {
       appendId: append.appendId,
       sessionId: append.sessionId,
       streamEpoch: append.streamEpoch,
       sequence: append.sequence,
-      record: append.record as never,
+      ...(projected === undefined
+        ? { record: append.record as never }
+        : {
+            piType: projected.piType,
+            projection: projected.projection.value,
+            rawJson: projected.rawJson,
+            rawSize: projected.rawSize,
+            rawSha256: projected.rawSha256,
+          }),
     });
   }
 

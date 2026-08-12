@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readdir } from "node:fs/promises";
+import { projectPiRecord, type ProjectedPiRecord } from "../pi/raw-projector.js";
 import { join } from "node:path";
 import { isJsonObject, type JsonObject, type JsonValue } from "@pimobile/protocol";
 import type {
@@ -18,7 +19,7 @@ import type { PiJsonRecord } from "../pi/lf-json-framer.js";
 import type { RuntimeSession, RuntimeSupervisor } from "../runtime/supervisor.js";
 import type { EntriesResponse, SnapshotSource } from "../sync/canonical-snapshot.js";
 
-const ALLOWED_OPERATIONS = new Set(["prompt", "abort", "get_state", "new_session"]);
+const ALLOWED_OPERATIONS = new Set(["prompt", "steer", "follow_up", "abort", "get_state", "new_session"]);
 const IDLE_POLL_MS = 100;
 const IDLE_WAIT_MS = 15_000;
 
@@ -36,6 +37,8 @@ export interface SessionAppend {
   readonly streamEpoch: string;
   readonly sequence: string;
   readonly record: unknown;
+  /** Canonical projected form (piType + bounded projection + raw hashes) for wire publishing. */
+  readonly projected?: ProjectedPiRecord;
 }
 
 export interface AgentUpdateNotice {
@@ -102,12 +105,18 @@ class SessionActor {
 
   private onRecord(record: PiJsonRecord): void {
     this.sequence += 1n;
+    // Synthetic runtimes may omit rawBytes/rawJson despite the type; derive them.
+    const runtime = record as { rawBytes?: Buffer; rawJson?: string; value: Readonly<Record<string, unknown>> };
+    const normalized: PiJsonRecord = runtime.rawBytes === undefined || runtime.rawJson === undefined
+      ? { rawBytes: Buffer.from(JSON.stringify(record.value), "utf8"), rawJson: JSON.stringify(record.value), value: record.value }
+      : record;
     this.options.onAppend?.({
       appendId: randomUUID(),
       sessionId: this.options.sessionId,
       streamEpoch: this.streamEpoch,
       sequence: this.sequence.toString(),
-      record: record.value,
+      record: normalized.value,
+      projected: projectPiRecord(normalized),
     });
     const changedAgent = this.agents.apply(record.value);
     if (changedAgent !== undefined) {
