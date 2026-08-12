@@ -36,6 +36,14 @@ sealed interface HostConnectionEvent {
         val runState: String?,
     ) : HostConnectionEvent
 
+    /**
+     * snapshot.end arrived but at least one content entry violated the wire contract and could
+     * not be mapped. Nothing is committed; the coordinator must still ack the fence cursor,
+     * because the host blocks the whole sync queue on each per-session ack. The local committed
+     * cursor is not advanced, so the next sync.resume re-requests a full snapshot (self-repair).
+     */
+    data class SnapshotRejected(val sessionId: SessionId, val cursor: EventCursor) : HostConnectionEvent
+
     /** One canonical event batch entry, already mapped to reducer and storage forms. */
     data class CanonicalEvent(
         val sessionId: SessionId,

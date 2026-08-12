@@ -393,6 +393,12 @@ class PiAppCoordinator(
             HostConnectionEvent.HostLocked -> lock(LockReason.HOST_LOCK)
             is HostConnectionEvent.SyncReset -> onSyncReset(event.sessionId, event.reason, now)
             is HostConnectionEvent.SnapshotReady -> onSnapshot(event, now)
+            is HostConnectionEvent.SnapshotRejected -> {
+                // No commit: the local cursor stays behind so the next sync.resume re-snapshots.
+                // The ack is still required; the host blocks the remaining sync queue on it.
+                acknowledge(event.sessionId, event.cursor)
+                update { it.copy(lastError = "SNAPSHOT_ENTRY_INVALID") }
+            }
             is HostConnectionEvent.CanonicalEvent -> onCanonicalEvent(event, now)
             HostConnectionEvent.SyncComplete -> onSyncComplete()
             is HostConnectionEvent.ApprovalOffer -> update {

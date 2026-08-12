@@ -1,4 +1,5 @@
 import { assertJsonValue, isJsonObject, type JsonObject } from "@pimobile/protocol";
+import { logError } from "../daemon/log.js";
 import { captureCanonicalSnapshot } from "../sync/canonical-snapshot.js";
 import type { GatewaySyncPlan, ReplaySyncPlan, SnapshotSyncPlan, SyncRuntime } from "./types.js";
 
@@ -94,17 +95,33 @@ export class CanonicalSyncSequencer {
   }
 
   private async startNext(replyTo: string | null, signal: AbortSignal): Promise<void> {
-    const cursor = this.queue.shift();
-    if (cursor === undefined) throw new SyncSequenceError("Synchronization cursor queue is empty");
-    const plan = await this.runtime.prepare(cursor, signal);
-    validatePlan(plan, cursor);
-    if (plan.kind === "replay") {
-      await this.publishReplay(plan, replyTo);
-      this.pending = { plan, expectedSequence: plan.throughSequence, afterCommit: [] };
-      return;
+    // A session whose snapshot/replay plan fails is skipped (the device keeps its
+    // stale cursor and re-snapshots on the next resume) instead of aborting sync
+    // for every remaining session.
+    let lastError: unknown;
+    for (let skipped = 0; this.queue.length > 0; skipped += 1) {
+      const cursor = this.queue.shift();
+      if (cursor === undefined) break;
+      try {
+        const plan = await this.runtime.prepare(cursor, signal);
+        validatePlan(plan, cursor);
+        if (plan.kind === "replay") {
+          await this.publishReplay(plan, replyTo);
+          this.pending = { plan, expectedSequence: plan.throughSequence, afterCommit: [] };
+          return;
+        }
+        const published = await this.publishSnapshot(plan, replyTo);
+        this.pending = { plan, expectedSequence: published.sequence, afterCommit: published.postFenceEvents };
+        return;
+      } catch (error) {
+        signal.throwIfAborted();
+        lastError = error;
+        logError("sync", `session plan failed (skipped, ${String(skipped)} so far)`, error);
+      }
     }
-    const published = await this.publishSnapshot(plan, replyTo);
-    this.pending = { plan, expectedSequence: published.sequence, afterCommit: published.postFenceEvents };
+    if (lastError instanceof Error) throw lastError;
+    if (lastError !== undefined) throw new SyncSequenceError("Every session plan failed");
+    throw new SyncSequenceError("Synchronization cursor queue is empty");
   }
 
   private async publishReplay(plan: ReplaySyncPlan, replyTo: string | null): Promise<void> {

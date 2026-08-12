@@ -37,6 +37,43 @@ class SessionTimelineTest {
     }
 
     @Test
+    fun timelineRendersWireJsonTextPartAsPlainMessageText() {
+        // Finalized message whose TEXT part projection is the raw wire envelope, as committed
+        // from a host snapshot/message.append; the bubble must render the text, not the JSON.
+        val base = previewDetailState()
+        val conversation = base.session.conversation.copy(
+            finalizedMessages = kotlinx.collections.immutable.persistentListOf(
+                io.github.verybigsad.pimobile.model.FinalizedMessage(
+                    id = io.github.verybigsad.pimobile.model.MessageId("msg-wire-1"),
+                    role = io.github.verybigsad.pimobile.model.MessageRole.ASSISTANT,
+                    content = kotlinx.collections.immutable.persistentListOf(
+                        io.github.verybigsad.pimobile.model.MessageContent(
+                            "content-0",
+                            io.github.verybigsad.pimobile.model.MessageContentKind.TEXT,
+                            0,
+                            "{\"text\":\"hello from the canonical log\",\"type\":\"text\"}",
+                        ),
+                    ),
+                    appendOrdinal = 1,
+                    createdAtEpochMillis = 1_000L,
+                    finalizedAtEpochMillis = 1_001L,
+                ),
+            ),
+            provisionalMessages = kotlinx.collections.immutable.persistentMapOf(),
+            hasOlderMessages = false,
+            lastSettlementId = null,
+        )
+        compose.setContent {
+            SessionTheme {
+                SessionTimeline(state = base.copy(session = base.session.copy(conversation = conversation)), onEvent = {})
+            }
+        }
+
+        compose.onNodeWithText("hello from the canonical log", useUnmergedTree = true).assertExists()
+        compose.onNodeWithText("{\"text\":\"hello from the canonical log\",\"type\":\"text\"}", substring = true, useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test
     fun timelineKeepsTextAndControlsAddressableAtTwoHundredPercentFontScale() {
         compose.setContent {
             val density = LocalDensity.current

@@ -101,12 +101,10 @@ internal class HostInboundRouter(
                     snapshotEntry(sessionId, entry, index)
                 }
                 if (messages.size != contentEntries.size) {
-                    android.util.Log.w(
-                        "HostInboundRouter",
-                        "snapshot entries unmapped: ${assembly.entries.size - messages.size}/${assembly.entries.size} " +
-                            "types=${assembly.entries.map { it.string("type") ?: "?" }.distinct().take(8)}",
-                    )
+                    // Unmapped content entries must not stall the host's per-session ack queue:
+                    // reject the snapshot (no commit) but still let the coordinator ack the fence.
                     onEvent(HostConnectionEvent.HostError("SNAPSHOT_ENTRY_INVALID", false))
+                    onEvent(HostConnectionEvent.SnapshotRejected(SessionId(sessionId), cursor))
                     return
                 }
                 onEvent(
@@ -132,6 +130,14 @@ internal class HostInboundRouter(
                         runState = null,
                     ),
                 )
+            }
+
+            // Live canonical append while READY (protocol v1: message.append carries the same
+            // projected record shape as an event.batch entry).
+            "message.append" -> {
+                val sessionText = body.string("sessionId") ?: return
+                val mapped = mapper.map(SessionId(sessionText), body) ?: return
+                onEvent(HostConnectionEvent.CanonicalEvent(SessionId(sessionText), mapped.cursor, mapped.conversationEvent, mapped.finalized))
             }
 
             "event.batch" -> {

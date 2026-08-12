@@ -183,7 +183,7 @@ private fun MessageBubble(
     onEvent: (SessionDetailEvent) -> Unit,
 ) {
     var contextOpen by rememberSaveable(messageId.value) { mutableStateOf(false) }
-    val visibleText = remember(content) { content.filter { it.kind == MessageContentKind.TEXT }.joinToString("\n") { sanitizeStructuredDisplay(it.projection) } }
+    val visibleText = remember(content) { content.filter { it.kind == MessageContentKind.TEXT }.joinToString("\n") { sanitizeStructuredDisplay(displayMessageText(it)) } }
     val roleLabel = role.displayLabel()
     Card(
         modifier = Modifier.fillMaxWidth().combinedClickable(onClick = {}, onLongClick = { contextOpen = true }).semantics {
@@ -214,8 +214,8 @@ private fun MessageBubble(
 @Composable
 private fun ContentBlock(block: MessageContent, provisional: Boolean, expanded: Boolean, onToggle: () -> Unit, onInspect: () -> Unit) {
     when (block.kind) {
-        MessageContentKind.TEXT -> Text(sanitizeStructuredDisplay(block.projection), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.semantics { traversalIndex = 2f })
-        MessageContentKind.THINKING -> ExpandableCard("Thinking", if (provisional) "Live thinking" else "Final thinking", block.projection, expanded, onToggle, onInspect)
+        MessageContentKind.TEXT -> Text(sanitizeStructuredDisplay(displayMessageText(block)), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.semantics { traversalIndex = 2f })
+        MessageContentKind.THINKING -> ExpandableCard("Thinking", if (provisional) "Live thinking" else "Final thinking", displayMessageText(block), expanded, onToggle, onInspect)
         MessageContentKind.TOOL_CALL -> ToolCard("Tool call", "Requested", block.projection, expanded, onToggle, onInspect)
         MessageContentKind.TOOL_RESULT -> ToolCard("Tool result", if (provisional) "Receiving" else "Complete", block.projection, expanded, onToggle, onInspect)
         MessageContentKind.IMAGE -> ImageAttachment(block.projection, onInspect)
@@ -334,6 +334,25 @@ private fun MessageContent.globalId(messageId: MessageId): String = "${messageId
 private fun dayKey(epochMillis: Long): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(epochMillis))
 private fun copyText(context: Context, value: String) { (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Pi message", value)) }
 private fun shareText(context: Context, value: String) { context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, value), "Share message").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+
+/**
+ * Human-readable text for one content part. The model retains the canonical JSON projection;
+ * text and thinking parts carry their display string in a named field of that projection, so
+ * rendering extracts the field instead of showing the raw envelope. Anything else (tool calls,
+ * unknown kinds, malformed JSON) falls back to the raw projection unchanged.
+ */
+internal fun displayMessageText(content: MessageContent): String {
+    val field = when (content.kind) {
+        MessageContentKind.TEXT -> "text"
+        MessageContentKind.THINKING -> "thinking"
+        else -> return content.projection
+    }
+    val parsed = runCatching {
+        kotlinx.serialization.json.Json.parseToJsonElement(content.projection) as? kotlinx.serialization.json.JsonObject
+    }.getOrNull() ?: return content.projection
+    val value = parsed[field] as? kotlinx.serialization.json.JsonPrimitive
+    return if (value != null && value.isString) value.content else content.projection
+}
 
 private val csiPattern = Regex("\u001B\\[[0-?]*[ -/]*[@-~]")
 private val oscPattern = Regex("\u001B\\][^\u0007\u001B]*(?:\u0007|\u001B\\\\)")

@@ -216,10 +216,10 @@ function storedRecordToEntry(record: CanonicalStoredRecord): SessionEntry {
     rawSha256: record.rawSha256,
   };
   try {
-    const projection = JSON.parse(record.projectionJson) as { value?: Record<string, unknown> };
-    const value = projection.value;
-    const message = value?.["message"];
-    if (value !== undefined && typeof message === "object" && message !== null && (record.piType === "message_end" || record.piType === "message_start")) {
+    // projection_json stores the ALREADY-UNWRAPPED projection ({"type":...,"message":{...}}).
+    const projection = JSON.parse(record.projectionJson) as Record<string, unknown>;
+    const message = projection["message"];
+    if (typeof message === "object" && message !== null && (record.piType === "message_end" || record.piType === "message_start")) {
       const msg = message as Record<string, unknown>;
       return {
         ...base,
@@ -259,7 +259,13 @@ class PiSnapshotSource implements SnapshotSource {
   }
 
   currentEventFence(): bigint {
-    return 0n;
+    const store = this.canonicalStore;
+    if (store === undefined) return 0n;
+    const state = store.sessionState(this.actor.sessionId);
+    if (state === undefined) return 0n;
+    // next_sequence is one past the last appended record; the fence is the last.
+    const next = BigInt(state.nextSequence);
+    return next > 0n ? next - 1n : 0n;
   }
 
   async getEntries(since?: string): Promise<EntriesResponse> {
