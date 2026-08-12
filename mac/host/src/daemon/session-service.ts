@@ -198,12 +198,34 @@ class SessionActor {
 }
 
 function storedRecordToEntry(record: CanonicalStoredRecord): SessionEntry {
-  const parsed: unknown = JSON.parse(record.rawJson);
-  if (isJsonObject(parsed)) {
-    const id = parsed["id"];
-    return { ...parsed, id: typeof id === "string" && id.length > 0 ? id : `seq-${record.sequence}` };
+  // Snapshot entries must be message-shaped for the Android mapper: id, role,
+  // content, and the raw authenticity fields. Meta records stay minimal (the app
+  // skips entries without content).
+  const base: Record<string, unknown> = {
+    id: `seq-${record.sequence}`,
+    type: record.piType,
+    rawJson: record.rawJson,
+    rawSize: String(Buffer.byteLength(record.rawJson, "utf8")),
+    rawSha256: record.rawSha256,
+  };
+  try {
+    const projection = JSON.parse(record.projectionJson) as { value?: Record<string, unknown> };
+    const value = projection.value;
+    const message = value?.["message"];
+    if (value !== undefined && typeof message === "object" && message !== null && (record.piType === "message_end" || record.piType === "message_start")) {
+      const msg = message as Record<string, unknown>;
+      return {
+        ...base,
+        id: `msg-${record.streamEpoch}-${record.sequence}`,
+        messageId: `msg-${record.streamEpoch}-${record.sequence}`,
+        role: msg["role"],
+        content: msg["content"],
+      } as SessionEntry;
+    }
+  } catch {
+    // fall through to the minimal meta entry
   }
-  return { id: `seq-${record.sequence}`, value: parsed };
+  return base as SessionEntry;
 }
 
 class PiSnapshotSource implements SnapshotSource {

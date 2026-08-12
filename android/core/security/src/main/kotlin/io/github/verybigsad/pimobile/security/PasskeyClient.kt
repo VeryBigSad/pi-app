@@ -155,7 +155,8 @@ class PasskeyClient(private val activity: Activity) : PasskeyCeremonyPerformer {
             execute()
         } catch (error: CancellationException) {
             throw error
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            android.util.Log.w("PasskeyClient", "debug executor failed: ${error.javaClass.simpleName}: ${error.message?.take(120)}")
             return PasskeyResult.ProviderError("debug-executor")
         }
         return runCatching {

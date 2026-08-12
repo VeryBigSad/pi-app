@@ -63,15 +63,15 @@ class EventProjectionMapper(
         val now = nowEpochMillis()
         return when (piType) {
             "message_start" -> {
-                val provisional = provisionalMessage(message, revision = 0, now) ?: return Mapped(cursor, null, null)
+                val provisional = provisionalMessage(message, revision = 0, now, cursor) ?: return Mapped(cursor, null, null)
                 provisionalRevisions[provisional.id.value] = 0
                 Mapped(cursor, ConversationEvent.ProvisionalStarted(cursor, provisional), null)
             }
 
             "message_update" -> {
-                val id = message?.string("id") ?: return Mapped(cursor, null, null)
+                val id = message?.string("id") ?: message?.string("role")?.let { "seq-" + cursor.streamEpoch.value + "-" + it } ?: return Mapped(cursor, null, null)
                 val revision = (provisionalRevisions[id] ?: 0) + 1
-                val provisional = provisionalMessage(message, revision, now) ?: return Mapped(cursor, null, null)
+                val provisional = provisionalMessage(message, revision, now, cursor) ?: return Mapped(cursor, null, null)
                 provisionalRevisions[id] = revision
                 Mapped(cursor, ConversationEvent.ProvisionalReplaced(cursor, provisional), null)
             }
@@ -106,9 +106,10 @@ class EventProjectionMapper(
         }
     }
 
-    private fun provisionalMessage(message: JsonObject?, revision: Long, now: Long): ProvisionalMessage? {
+    private fun provisionalMessage(message: JsonObject?, revision: Long, now: Long, cursor: EventCursor): ProvisionalMessage? {
         message ?: return null
-        val id = message.string("id") ?: return null
+        // Pi messages have no id field; derive a stable per-stream identity from the cursor.
+        val id = message.string("id") ?: ("seq-" + cursor.streamEpoch.value + "-" + (message.string("role") ?: "unknown"))
         return ProvisionalMessage(
             id = MessageId(id),
             role = role(message.string("role")),
@@ -126,7 +127,7 @@ class EventProjectionMapper(
         now: Long,
     ): MessageEntity? {
         message ?: return null
-        val id = message.string("id") ?: return null
+        val id = message.string("id") ?: ("msg-" + cursor.streamEpoch.value + "-" + cursor.sequence.text)
         val content = message["content"] ?: return null
         val rawJson = event.string("rawJson")
         val rawRef = event["rawRef"] as? JsonObject

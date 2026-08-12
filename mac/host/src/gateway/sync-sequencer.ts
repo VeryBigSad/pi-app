@@ -42,9 +42,15 @@ export class CanonicalSyncSequencer {
     if (this.pending !== undefined) throw new SyncSequenceError("Synchronization is already active");
     this.completedEmpty = false;
     this.queue = validateResume(resume);
-    if (this.queue.length === 0) {
-      // Fresh device: no cursors means "snapshot everything currently supervised".
-      this.queue = (await this.runtime.listAll?.(signal)) ?? [];
+    // Sessions the device does not know yet (fresh device or host-side new sessions)
+    // must join the queue as full snapshots; known cursors resume incrementally.
+    const known = new Set(
+      this.queue.map((cursor) => (typeof cursor["sessionId"] === "string" ? cursor["sessionId"] : undefined)),
+    );
+    const all = (await this.runtime.listAll?.(signal)) ?? [];
+    for (const entry of all) {
+      const sessionId = entry["sessionId"];
+      if (typeof sessionId === "string" && !known.has(sessionId)) this.queue.push(entry);
     }
     if (this.queue.length === 0) {
       // No sessions exist at all: publish the empty catalogs and complete the fence.
