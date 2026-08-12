@@ -201,8 +201,15 @@ function storedRecordToEntry(record: CanonicalStoredRecord): SessionEntry {
   // Snapshot entries must be message-shaped for the Android mapper: id, role,
   // content, and the raw authenticity fields. Meta records stay minimal (the app
   // skips entries without content).
+  let ownId: string | undefined;
+  try {
+    const parsed: unknown = JSON.parse(record.rawJson);
+    if (isJsonObject(parsed) && typeof parsed["id"] === "string" && parsed["id"].length > 0) ownId = parsed["id"];
+  } catch {
+    // ignore — fall back to the sequence-derived id
+  }
   const base: Record<string, unknown> = {
-    id: `seq-${record.sequence}`,
+    id: ownId ?? `seq-${record.sequence}`,
     type: record.piType,
     rawJson: record.rawJson,
     rawSize: String(Buffer.byteLength(record.rawJson, "utf8")),
@@ -220,7 +227,7 @@ function storedRecordToEntry(record: CanonicalStoredRecord): SessionEntry {
         messageId: `msg-${record.streamEpoch}-${record.sequence}`,
         role: msg["role"],
         content: msg["content"],
-      } as SessionEntry;
+      };
     }
   } catch {
     // fall through to the minimal meta entry
