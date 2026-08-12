@@ -2,7 +2,7 @@
 
 Native Android control surface for the Pi coding agent running on your Mac. The Mac keeps every credential, runs Pi, and owns session truth; the phone is a fast, secure client for triage, steering, review, and dictation.
 
-> **Status: implementation complete; verification in progress.** The full module set exists: protocol schemas/codecs, Mac host daemon (Pi runtime, journal, sync, pairing, terminal, voice, push), Android core (protocol, network, security, storage, push, voice, update) and features (session, agents, settings), the xterm terminal module, the Go relay, and hardened Terraform. `npm run check` is green (372 tests across 45 files), the Gradle aggregate (unit + lint + assemble) is green, and API 29 instrumentation (113 tests) passes on emulator `PiApp_API_29` (serial `emulator-5590`). **API 34+ emulator lanes and every physical-device gate are unverified.** Nothing is shipped.
+> **Status: live end-to-end core path proven 2026-08-12 against the real YC deployment.** The full module set exists: protocol schemas/codecs, Mac host daemon (Pi runtime, journal, sync, pairing, terminal, voice, push), Android core (protocol, network, security, storage, push, voice, update) and features (session, agents, settings), the xterm terminal module, the Go relay, and hardened Terraform. Verified live: YC deployment (VM, registry, sslip.io TLS 1.3, signed in-place update rollout), full pairing ceremony E2E on an API 29 emulator over the relay rendezvous, steady-state mTLS reconnect to READY, and the semantic round trip (phone message → journal → real Pi → LLM events → message.append) with a durable canonical log surviving daemon restarts. CI green: node/android/api29/api34-terminal/terraform/go + secret scan. **Physical-device gates, terminal-mode and voice E2E on device, and full timeline UI render evidence remain open.**
 
 Application ID: `io.github.verybigsad.pimobile` · `minSdk 29` · Passkey RP: `verybigsad.github.io` · Pi baseline: 0.84.0 + reviewed patch
 
@@ -124,26 +124,38 @@ terraform -chdir=infra/terraform init -backend=false
 terraform -chdir=infra/terraform validate
 ```
 
-No cloud resource has been applied yet; see [docs/infra-and-cost.md](docs/infra-and-cost.md).
+The YC deployment is applied and live (folder `pimobile`, VM 158.160.210.102); see [docs/infra-and-cost.md](docs/infra-and-cost.md).
 
 ## Verification state (honest gates)
 
-Verified as of 2026-08-11:
+Verified live 2026-08-12 against the real deployment:
 
-- `npm run check` green: ESLint, `tsc -b`, and 372 vitest tests across 45 files (protocol codecs/fixtures/fuzz, Mac host daemon/gateway/journal/pairing/terminal/voice, approval broker, pi-patch, scripts).
-- Gradle aggregate green: `verifyEnvironment testDebugUnitTest lintDebug assembleDebug assembleRelease`; 545 unit test executions green in the last recorded run (311 debug + 234 release variant, 0 failures).
-- API 29 instrumentation green: 113 connected tests, 0 failures, on `PiApp_API_29` (serial `emulator-5590`) covering app launch, terminal canary, core security/network/storage/push/voice/update, and feature session/agents/settings.
+- **YC deployment**: folder `pimobile`, VM 158.160.210.102 (`standard-v4a`), private YC Container Registry + VM service account, sslip.io ACME TLS 1.3, hardened cloud-init, ntfy deny-all with `up*`-scoped ACL, signed in-place `pimobile-update` rollout path exercised repeatedly.
+- **Pairing ceremony E2E over relay** on API 29 emulator: signed `pimobile://pair` invitation → rendezvous exchange → device route key registration → relay-spliced data tunnel → inner provisional TLS 1.3 → passkey ceremony (debug authenticator) → short code → local Mac confirmation → device certificate issued. Mac daemon relay control channel ready.
+- **Steady state**: device reconnects via device-data tunnel → inner mTLS → passkey assertion → `USER_AUTHENTICATED` → sync → `READY`; session list loads over relay ("Pi Mac · Relayed"); live `session.catalog` push on new sessions; unknown-session snapshot union on resume.
+- **Semantic round trip**: message typed on the phone → `command.submit` → fail-closed journal dispatch → real Pi RPC child → LLM response events → `message.append` published (canonical projected records).
+- **Durable canonical log** (`canonical.sqlite`): epochs/sequences survive daemon restarts; snapshots serve durable history; respawn replay dedup.
+- **CI green history**: node / android / api29 / api34-terminal / terraform / go + secret scan.
+
+Verified earlier (unit/instrumentation, 2026-08-11):
+
+- `npm run check` green: ESLint, `tsc -b`, and 372 vitest tests across 45 files.
+- Gradle aggregate green: `verifyEnvironment testDebugUnitTest lintDebug assembleDebug assembleRelease`; 545 unit test executions (0 failures).
+- API 29 instrumentation green: 113 connected tests, 0 failures, on `PiApp_API_29` (serial `emulator-5590`).
 - Go relay suites green; Terraform `fmt`/`validate` wired into CI.
-- DAL is live: `https://verybigsad.github.io/.well-known/assetlinks.json` returns 200 `application/json` with zero redirects and both relations; local release APK v3 signature matches the published fingerprint.
+- DAL live: `https://verybigsad.github.io/.well-known/assetlinks.json` 200 `application/json`, zero redirects, both relations; local release APK v3 signature matches the published fingerprint.
 
 Open gates (none of these are satisfied; do not claim otherwise):
 
-- **API 34+ emulator lanes unverified.** Instrumentation evidence exists only for API 29.
-- **No physical-device evidence at all.** Bitwarden release ceremony, hardware-backed keys, Gboard/Bluetooth input, real microphone, Doze/OEM push timing, and performance budgets remain blocked on a physical Android 14+ device. Emulator results are never physical evidence.
-- **No cloud apply.** The YC VM is defined but not created; remote relay/ntfy paths are untested end-to-end.
+- **Multi-session sync completeness.** The app session list may show a subset until the ack/fence loop converges; under work.
+- **Timeline live-render.** Streamed message content verified at the projection layer; full UI render evidence pending.
+- **Terminal-mode E2E on device** not run.
+- **Voice dictation E2E** with a real microphone not run.
+- **Physical-device gates all pending**: passkey ceremonies (API 29 Google Play services, API 34+ third-party provider such as Bitwarden), hardware-backed key, Doze/OEM battery behavior, Gboard/Bluetooth input, performance budgets. Emulator results are never physical evidence.
+- **GHCR package public visibility** (optional provenance path; runtime uses YC CR).
+- **Update feed publication** needs `RELEASE_PUBLISH_TOKEN`.
 - **Signing backup incomplete.** Dedicated EC release cert exists outside Git with mode-`0600` keystore and Keychain password; off-machine backup and rotation drill remain.
 - **No Firebase credentials, by design.** Optional FCM adapter is not a release gate.
-- **Linux CI API 29 lane** is defined (`.github/workflows/ci.yml`); emulator speed/fragility caveats apply.
 
 Full requirement-by-requirement evidence: [docs/requirements-traceability.md](docs/requirements-traceability.md).
 
@@ -180,7 +192,7 @@ See [docs/security.md](docs/security.md).
 | [docs/reviews/plan-verification.md](docs/reviews/plan-verification.md) | Full review dispositions, including rejected recommendations |
 | [docs/research/](docs/research/) | Four research tracks with primary sources |
 
-## Current local setup (verified 2026-08-11)
+## Current local setup (verified 2026-08-12)
 
 | Item | State |
 |---|---|
@@ -195,7 +207,7 @@ See [docs/security.md](docs/security.md).
 | Groq key | `~/.groq_key`, mode `0600`, 57 bytes. Read on the Mac at request time only, never serialized into a frame |
 | tmux | 3.5a; `capture-pane -e` and `pipe-pane` both confirmed working |
 | GitHub | `gh` authenticated as `VeryBigSad`, SSH git protocol |
-| Yandex Cloud | `yc` present, `default` profile active, no project resource created |
+| Yandex Cloud | `yc` present, `default` profile active; live deployment in folder `pimobile` (VM 158.160.210.102, `standard-v4a`, private CR + VM SA, sslip.io TLS 1.3) |
 
 ## Repository
 
