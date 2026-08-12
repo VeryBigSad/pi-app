@@ -150,6 +150,13 @@ internal class HostInboundRouter(
                 onEvent(HostConnectionEvent.ApprovalExpired(offerId, body.string("reason") ?: "deadline"))
             }
 
+            "session.catalog" -> {
+                val catalog = runCatching {
+                    io.github.verybigsad.pimobile.network.WireBodies.parseSessionCatalog(body)
+                }.getOrNull() ?: return emitError("SESSION_CATALOG_INVALID")
+                onEvent(HostConnectionEvent.SessionCatalogReceived(catalog))
+            }
+
             "agents.catalog" -> {
                 val catalog = runCatching {
                     io.github.verybigsad.pimobile.network.WireBodies.parseAgentsCatalog(body)

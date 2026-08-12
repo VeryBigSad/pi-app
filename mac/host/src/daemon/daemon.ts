@@ -187,6 +187,13 @@ export class HostDaemon {
       onSettlement: (notice) => this.onSettlement(notice),
       onAppend: (append) => this.onSessionAppend(append),
       onAgentsUpdate: (notice) => this.onAgentsUpdate(notice),
+      onCatalogChanged: () => {
+        const sessions = this.sessions;
+        if (sessions === undefined) return;
+        void sessions.catalogSnapshot(AbortSignal.timeout(10_000)).then((entries) => {
+          this.gateway?.publishToReady("session.catalog", { sessions: entries });
+        }).catch((error: unknown) => logError("catalog", "publish session catalog", error));
+      },
     });
 
     const terminalResult = await createLocalTerminalBackend({ runtimeParent: this.layout.terminalRuntimeParent });

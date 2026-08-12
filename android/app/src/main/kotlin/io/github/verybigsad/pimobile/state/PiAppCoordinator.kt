@@ -421,6 +421,15 @@ class PiAppCoordinator(
             HostConnectionEvent.TerminalReset -> terminalPort()?.onReset()
             is HostConnectionEvent.TerminalHistoryResult -> terminalPort()?.onHistoryResult(event)
             is HostConnectionEvent.AgentsCatalogReceived -> agentsSink.onCatalog(event.catalog)
+            is HostConnectionEvent.SessionCatalogReceived -> applyCatalog(
+                event.catalog.sessions.associate { entry ->
+                    SessionId(entry.id.value) to SessionCatalogEntry(
+                        provider = entry.provider,
+                        modelName = entry.model,
+                        thinkingLevel = entry.thinkingLevel,
+                    )
+                },
+            )
             is HostConnectionEvent.AgentsUpdateReceived -> agentsSink.onUpdate(event.update)
             is HostConnectionEvent.HostError -> update { it.copy(lastError = event.code) }
             is HostConnectionEvent.Disconnected -> onDisconnected(event.reason, now)

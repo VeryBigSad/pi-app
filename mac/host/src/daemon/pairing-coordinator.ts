@@ -223,11 +223,16 @@ export class PairingCoordinator implements PairingRuntime {
     const credential = body["credential"];
     if (!isJsonObject(credential)) throw new SecurityError("SECURITY_WEBAUTHN_REJECTED", "registration credential is invalid");
     this.options.ceremonies.takeForWebAuthnVerification(ceremony.challenge, this.ceremonyBinding(ceremony, context), this.now());
-    const verified = await verifyOwnerRegistration({
-      response: credential as unknown as Parameters<typeof verifyOwnerRegistration>[0]["response"],
-      expectedChallenge: ceremony.challenge,
-      ...(this.options.debugAndroidOrigins === undefined ? {} : { allowedOrigins: this.options.debugAndroidOrigins }),
-    });
+    let verified;
+    try {
+      verified = await verifyOwnerRegistration({
+        response: credential as unknown as Parameters<typeof verifyOwnerRegistration>[0]["response"],
+        expectedChallenge: ceremony.challenge,
+        ...(this.options.debugAndroidOrigins === undefined ? {} : { allowedOrigins: this.options.debugAndroidOrigins }),
+      });
+    } catch (error) {
+      return this.authFailureReply(ceremony, error);
+    }
     const after = this.options.ceremonies.recordWebAuthnResult(ceremony.ceremonyId, true);
     this.pendingCeremony = after;
     await this.options.store.addOwnerCredential(verified.credential);
@@ -241,15 +246,22 @@ export class PairingCoordinator implements PairingRuntime {
       throw new SecurityError("SECURITY_WEBAUTHN_REJECTED", "assertion credential is invalid");
     }
     const stored = this.options.store.findOwnerCredential(credential["id"]);
-    if (stored === undefined) throw new SecurityError("SECURITY_WEBAUTHN_REJECTED", "assertion credential is unknown");
+    if (stored === undefined) {
+      return this.authFailureReply(ceremony, new SecurityError("SECURITY_WEBAUTHN_REJECTED", "assertion credential is unknown"));
+    }
     this.options.ceremonies.takeForWebAuthnVerification(ceremony.challenge, this.ceremonyBinding(ceremony, context), this.now());
-    const result = await verifyOwnerAssertion({
-      response: credential as unknown as Parameters<typeof verifyOwnerAssertion>[0]["response"],
-      expectedChallenge: ceremony.challenge,
-      credential: stored,
-      revocations: this.options.revocations,
-      ...(this.options.debugAndroidOrigins === undefined ? {} : { allowedOrigins: this.options.debugAndroidOrigins }),
-    });
+    let result;
+    try {
+      result = await verifyOwnerAssertion({
+        response: credential as unknown as Parameters<typeof verifyOwnerAssertion>[0]["response"],
+        expectedChallenge: ceremony.challenge,
+        credential: stored,
+        revocations: this.options.revocations,
+        ...(this.options.debugAndroidOrigins === undefined ? {} : { allowedOrigins: this.options.debugAndroidOrigins }),
+      });
+    } catch (error) {
+      return this.authFailureReply(ceremony, error);
+    }
     await this.options.store.updateOwnerCredentialCounter(stored.id, result.newCounter);
     const after = this.options.ceremonies.recordWebAuthnResult(ceremony.ceremonyId, true);
     this.pendingCeremony = after;
@@ -359,6 +371,15 @@ export class PairingCoordinator implements PairingRuntime {
       challenge: ceremony.challenge,
       expiresAt: new Date(ceremony.expiresAtMs).toISOString(),
     };
+  }
+
+  /** Clean auth.result failure reply instead of killing the provisional connection. */
+  private authFailureReply(ceremony: PairingCeremony, error: unknown): PairingResult {
+    const code = error instanceof SecurityError ? error.code : "SECURITY_WEBAUTHN_REJECTED";
+    logWarn("pairing", `ceremony ${ceremony.ceremonyId} rejected: ${code}`);
+    const after = this.options.ceremonies.recordWebAuthnResult(ceremony.ceremonyId, false);
+    this.pendingCeremony = after;
+    return { replies: [{ type: "auth.result", body: { ceremonyId: ceremony.ceremonyId, success: false, error: code } }] };
   }
 
   private authResultBody(ceremony: PairingCeremony): JsonObject {

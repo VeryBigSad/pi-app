@@ -62,6 +62,9 @@ sealed interface HostConnectionEvent {
     data class AgentsCatalogReceived(val catalog: io.github.verybigsad.pimobile.network.WireBodies.AgentsCatalog) :
         HostConnectionEvent
 
+    data class SessionCatalogReceived(val catalog: io.github.verybigsad.pimobile.network.WireBodies.SessionCatalog) :
+        HostConnectionEvent
+
     data class AgentsUpdateReceived(val update: io.github.verybigsad.pimobile.network.WireBodies.AgentsUpdate) :
         HostConnectionEvent
 

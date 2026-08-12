@@ -49,6 +49,8 @@ interface SessionActorOptions {
   readonly onSettlement: (notice: SettlementNotice) => void;
   readonly onAppend?: (append: SessionAppend) => void;
   readonly onAgentsUpdate?: (notice: AgentUpdateNotice) => void;
+  /** Fires when a new session actor appears; the daemon republishes session.catalog. */
+  readonly onCatalogChanged?: () => void;
 }
 
 class SessionActor {
@@ -210,6 +212,8 @@ export interface SessionServiceOptions {
   readonly onSettlement: (notice: SettlementNotice) => void;
   readonly onAppend?: (append: SessionAppend) => void;
   readonly onAgentsUpdate?: (notice: AgentUpdateNotice) => void;
+  /** Fires when a new session actor appears; the daemon republishes session.catalog. */
+  readonly onCatalogChanged?: () => void;
 }
 
 /**
@@ -238,11 +242,22 @@ export class SessionService implements CommandPathRouter, CommandAuthorizer, Syn
       ...(this.options.onAgentsUpdate === undefined ? {} : { onAgentsUpdate: this.options.onAgentsUpdate }),
     });
     this.actors.set(sessionId, actor);
+    this.options.onCatalogChanged?.();
     return actor;
   }
 
   sessionIds(): readonly string[] {
     return [...this.actors.keys()];
+  }
+
+  /** Current session.catalog sessions array from every supervised actor. */
+  async catalogSnapshot(signal: AbortSignal): Promise<JsonObject[]> {
+    signal.throwIfAborted();
+    const entries: JsonObject[] = [];
+    for (const actor of this.actors.values()) {
+      entries.push(await this.catalog(actor, actor.sessionId, signal));
+    }
+    return entries;
   }
 
   capture(sessionId: string): CommandDispatchPath {
