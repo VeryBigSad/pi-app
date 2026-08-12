@@ -174,7 +174,17 @@ jobs:
             "$APK_PATH#app-release.apk" "$RUNNER_TEMP/update-v1.json#update-v1.json" \
             --repo "$GH_REPO" --target "$GITHUB_SHA" --draft \
             --title "$RELEASE_TAG" --notes "Pi Mobile $RELEASE_TAG (anonymous APK mirror)" >/dev/null
-          release_json=$(gh api --method GET "repos/$GH_REPO/releases?per_page=100" -f type=all)
+          release_json=
+          for attempt in {1..12}; do
+            release_json=$(gh api --method GET "repos/$GH_REPO/releases?per_page=100" -f type=all)
+            if jq -e --arg tag "$RELEASE_TAG" --arg sha "$GITHUB_SHA" \
+              '[.[] | select(.draft == true and .tag_name == $tag and .target_commitish == $sha)] | length == 1' \
+              <<<"$release_json" >/dev/null; then
+              break
+            fi
+            test "$attempt" -lt 12 || { echo "unique draft release missing after retries"; exit 1; }
+            sleep 5
+          done
           release_id=$(jq -r --arg tag "$RELEASE_TAG" --arg sha "$GITHUB_SHA" \
             '[.[] | select(.draft == true and .tag_name == $tag and .target_commitish == $sha)] | if length == 1 then .[0].id else empty end' \
             <<<"$release_json")
