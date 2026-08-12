@@ -170,16 +170,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
         run: |
-          gh release create "$RELEASE_TAG" \
+          release_url=$(gh release create "$RELEASE_TAG" \
             "$APK_PATH#app-release.apk" "$RUNNER_TEMP/update-v1.json#update-v1.json" \
             --repo "$GH_REPO" --target "$GITHUB_SHA" --draft \
-            --title "$RELEASE_TAG" --notes "Pi Mobile $RELEASE_TAG (anonymous APK mirror)"
+            --title "$RELEASE_TAG" --notes "Pi Mobile $RELEASE_TAG (anonymous APK mirror)")
+          release_id=${release_url##*/}
+          [[ "$release_id" =~ ^[1-9][0-9]*$ ]] || { echo "draft release id missing"; exit 1; }
+          echo "RELEASE_ID=$release_id" >> "$GITHUB_ENV"
 
       - name: Verify draft assets before irreversible publication
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
         run: |
-          release_json=$(gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG")
+          release_json=$(gh api "repos/$GH_REPO/releases/$RELEASE_ID")
           jq -e --arg sha "$GITHUB_SHA" \
             '.draft == true and .prerelease == false and .immutable == false and .target_commitish == $sha' \
             <<<"$release_json" >/dev/null || { echo "draft release identity differs"; exit 1; }
@@ -191,8 +194,14 @@ jobs:
           test "$metadata_digest" = "sha256:$METADATA_SHA256" || { echo "draft metadata digest differs"; exit 1; }
           rm -rf "$RUNNER_TEMP/draft-assets"
           mkdir -p "$RUNNER_TEMP/draft-assets"
-          gh release download "$RELEASE_TAG" --repo "$GH_REPO" --dir "$RUNNER_TEMP/draft-assets" \
-            --pattern app-release.apk --pattern update-v1.json
+          while IFS=$'\t' read -r asset_id asset_name; do
+            case "$asset_name" in
+              app-release.apk|update-v1.json) ;;
+              *) echo "unexpected draft asset $asset_name"; exit 1 ;;
+            esac
+            gh api -H "Accept: application/octet-stream" "repos/$GH_REPO/releases/assets/$asset_id" \
+              > "$RUNNER_TEMP/draft-assets/$asset_name"
+          done < <(jq -r '.assets[] | [.id, .name] | @tsv' <<<"$release_json")
           cmp -s "$RUNNER_TEMP/draft-assets/app-release.apk" "$APK_PATH" || { echo "draft APK bytes differ"; exit 1; }
           cmp -s "$RUNNER_TEMP/draft-assets/update-v1.json" "$RUNNER_TEMP/update-v1.json" || {
             echo "draft metadata bytes differ"
@@ -202,7 +211,7 @@ jobs:
       - name: Publish and lock immutable release
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
-        run: gh release edit "$RELEASE_TAG" --repo "$GH_REPO" --draft=false --latest
+        run: gh api --method PATCH "repos/$GH_REPO/releases/$RELEASE_ID" -f draft=false -f make_latest=true >/dev/null
 
       - name: Verify immutable release attestation, target, assets, and anonymous bytes
         env:
