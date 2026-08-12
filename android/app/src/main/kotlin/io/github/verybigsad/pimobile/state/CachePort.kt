@@ -21,6 +21,11 @@ interface CachePort {
 
     suspend fun loadSessions(): List<SessionEntity>
 
+    suspend fun loadSession(sessionId: String): SessionEntity?
+
+    /** Persists catalog metadata without replacing retained canonical messages. */
+    suspend fun upsertSession(session: SessionEntity)
+
     suspend fun loadRecentMessages(sessionId: String, limit: Int): List<MessageEntity>
 
     /** Retained message count for one session; shrinks under quota eviction. */
@@ -44,14 +49,24 @@ interface CachePort {
     /** Clears resync-able cache content; drafts and trust rows survive. */
     suspend fun markCanonicalUnavailable()
 
-    /** Commits one finalized message plus its session row in a single transaction. */
-    suspend fun commitFinalizedMessage(session: SessionEntity, message: MessageEntity)
+    /**
+     * Commits every accepted canonical event's cursor and, when present, its finalized message
+     * in one transaction. The caller must not acknowledge the event before this returns.
+     */
+    suspend fun commitCanonicalEvent(session: SessionEntity, finalized: MessageEntity?)
 
     /** Atomically replaces a complete snapshot; drafts are retained. */
     suspend fun replaceSessionSnapshot(session: SessionEntity, messages: List<MessageEntity>)
 
     /** Drops one session's canonical content (sync.reset); drafts are retained. */
     suspend fun resetSessionContent(session: SessionEntity)
+
+    /**
+     * Atomically revokes [macId] and removes every host-bound session, message, draft,
+     * command receipt, and cursor. This app supports one active Mac, so a full purge is safer
+     * than allowing a new Mac to inherit ambiguous unnamespaced rows.
+     */
+    suspend fun revokeAndPurge(macId: String, revokedAtEpochMs: Long, reasonCode: String)
 
     /** All committed resume cursors for sync.resume. */
     suspend fun committedCursors(): List<Pair<String, CanonicalAppendCursor>>

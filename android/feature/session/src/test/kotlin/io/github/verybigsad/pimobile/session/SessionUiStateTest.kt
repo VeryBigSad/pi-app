@@ -199,9 +199,9 @@ class SessionUiStateTest {
         val entries = buildTimelineEntries(sessionState(conversation()))
 
         assertThat(entries.map(TimelineEntry::stableKey)).containsExactly(
-            "final:final-message",
-            "provisional:provisional-early",
-            "provisional:provisional-late",
+            "message:final-message",
+            "message:provisional-early",
+            "message:provisional-late",
         ).inOrder()
     }
 

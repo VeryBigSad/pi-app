@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "encoding": "base64url-no-padding",
+  "minBytes": 22,
+  "maxBytes": 128,
+  "hostPayload": "auK8L687UJTKhfUiBmvHuXmYIEKnmzNWMuFdwdzKLw0",
+  "invalidPayloads": [
+    {
+      "name": "legacy-json-metadata",
+      "payload": "{\"v\":1,\"kind\":\"wake\",\"sessionId\":\"550e8400-e29b-41d4-a716-446655440001\",\"atMs\":1700000000000}",
+      "reason": "INVALID_WAKE_ID"
+    },
+    {
+      "name": "too-short",
+      "payload": "short",
+      "reason": "INVALID_WAKE_ID"
+    },
+    {
+      "name": "padded-base64",
+      "payload": "abcdefghijklmnopqrstu=",
+      "reason": "INVALID_WAKE_ID"
+    },
+    {
+      "name": "empty",
+      "payload": "",
+      "reason": "EMPTY"
+    }
+  ]
+}

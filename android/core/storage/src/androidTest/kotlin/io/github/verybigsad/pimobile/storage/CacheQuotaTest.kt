@@ -95,6 +95,35 @@ class CacheQuotaTest {
     }
 
     @Test
+    fun canonicalCursorAndFinalizedMessageCommitTogether() = runBlocking {
+        val database = openDatabase()
+        val cursor = CanonicalAppendCursor("epoch-1", "2", null, "17")
+        val session = session("session", updatedAt = 2).copy(canonicalCursor = cursor)
+        database.dao().commitCanonicalEvent(session, message("session", 2))
+
+        assertThat(database.dao().session("session")?.canonicalCursor).isEqualTo(cursor)
+        assertThat(database.dao().messages("session").single().appendId).isEqualTo("append-2")
+        database.close()
+    }
+
+    @Test
+    fun unpairPurgeRemovesHostDataAndRetainsRevocation() = runBlocking {
+        val database = openDatabase()
+        database.dao().upsertSession(session("old-session", updatedAt = 1))
+        database.dao().upsertMessages(listOf(message("old-session", 1)))
+        database.dao().upsertDraft(DraftEntity("old-session", "draft", "voice", 1, 1))
+        database.dao().upsertTrustState(trusted("old-mac"))
+
+        database.dao().revokeAndPurge("old-mac", 2, "USER_UNPAIRED")
+
+        assertThat(database.dao().sessionCount()).isEqualTo(0)
+        assertThat(database.dao().messageCount("old-session")).isEqualTo(0)
+        assertThat(database.dao().draft("old-session")).isNull()
+        assertThat(database.dao().trustState("old-mac")?.status).isEqualTo(StoredTrustStatus.REVOKED)
+        database.close()
+    }
+
+    @Test
     fun keysetPagingWalksCanonicalUint64OrderAcrossSignedLongBoundary() = runBlocking {
         val database = openDatabase()
         database.dao().upsertSession(session("session", updatedAt = 1))
@@ -123,7 +152,11 @@ class CacheQuotaTest {
         context,
         PiMobileDatabase::class.java,
         DATABASE_NAME,
-    ).addMigrations(StorageMigrations.MIGRATION_1_2, StorageMigrations.MIGRATION_2_3).build()
+    ).addMigrations(
+        StorageMigrations.MIGRATION_1_2,
+        StorageMigrations.MIGRATION_2_3,
+        StorageMigrations.MIGRATION_3_4,
+    ).build()
 
     internal companion object {
         const val DATABASE_NAME = "cache-quota-test.db"

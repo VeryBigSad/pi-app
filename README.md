@@ -203,7 +203,7 @@ See [docs/security.md](docs/security.md).
 | Running emulator | `PiApp_API_29` on serial `emulator-5590` (instrumentation evidence above) |
 | Build tuple | Gradle 8.13, AGP 8.13.2, Kotlin 2.4.10, Compose BOM 2026.06.01, JDK21/JVM17, SDK 36/36/29, 9 Gradle workers |
 | JDK | Temurin 21.0.8 (build JDK, mandatory) and 25.0.2 present |
-| Node / Go / Terraform | 22.23.2 / 1.26.2 / 1.5.7 |
+| Node / Go / Terraform | 22.23.2 / 1.26.5 / 1.5.7 |
 | Groq key | `~/.groq_key`, mode `0600`, 57 bytes. Read on the Mac at request time only, never serialized into a frame |
 | tmux | 3.5a; `capture-pane -e` and `pipe-pane` both confirmed working |
 | GitHub | `gh` authenticated as `VeryBigSad`, SSH git protocol |

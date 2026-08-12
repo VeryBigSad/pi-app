@@ -6,6 +6,8 @@ import io.github.verybigsad.pimobile.model.TransportPath
 import io.github.verybigsad.pimobile.storage.MessageEntity
 import io.github.verybigsad.pimobile.storage.SessionEntity
 import io.github.verybigsad.pimobile.voice.MacVoiceError
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
 import kotlinx.serialization.json.JsonObject
 
 /** Inbound events from one live host connection generation. */
@@ -31,17 +33,13 @@ sealed interface HostConnectionEvent {
     data class SnapshotReady(
         val sessionId: SessionId,
         val cursor: EventCursor,
+        val lastAppendId: String?,
         val session: SessionEntity,
         val messages: List<MessageEntity>,
         val runState: String?,
     ) : HostConnectionEvent
 
-    /**
-     * snapshot.end arrived but at least one content entry violated the wire contract and could
-     * not be mapped. Nothing is committed; the coordinator must still ack the fence cursor,
-     * because the host blocks the whole sync queue on each per-session ack. The local committed
-     * cursor is not advanced, so the next sync.resume re-requests a full snapshot (self-repair).
-     */
+    /** Snapshot framing or content was invalid. Nothing is committed or acknowledged. */
     data class SnapshotRejected(val sessionId: SessionId, val cursor: EventCursor) : HostConnectionEvent
 
     /** One canonical event batch entry, already mapped to reducer and storage forms. */
@@ -50,6 +48,7 @@ sealed interface HostConnectionEvent {
         val cursor: EventCursor,
         val conversationEvent: io.github.verybigsad.pimobile.model.ConversationEvent?,
         val finalized: MessageEntity?,
+        val acknowledgeSyncFence: Boolean = false,
     ) : HostConnectionEvent
 
     data class ApprovalOffer(
@@ -67,6 +66,9 @@ sealed interface HostConnectionEvent {
 
     data class ApprovalExpired(val offerId: String, val reason: String) : HostConnectionEvent
 
+    /** Command correlation is in-memory only; no command payload is retained after submission. */
+    data class CommandStatus(val commandId: String, val state: String, val errorCode: String?) : HostConnectionEvent
+
     data class AgentsCatalogReceived(val catalog: io.github.verybigsad.pimobile.network.WireBodies.AgentsCatalog) :
         HostConnectionEvent
 
@@ -74,6 +76,9 @@ sealed interface HostConnectionEvent {
         HostConnectionEvent
 
     data class AgentsUpdateReceived(val update: io.github.verybigsad.pimobile.network.WireBodies.AgentsUpdate) :
+        HostConnectionEvent
+
+    data class SessionSettledReceived(val settled: io.github.verybigsad.pimobile.network.WireBodies.SessionSettled) :
         HostConnectionEvent
 
     data class VoiceTranscript(val sessionId: String, val type: String, val body: ByteArray) : HostConnectionEvent
@@ -86,14 +91,11 @@ sealed interface HostConnectionEvent {
 
     data object TerminalReset : HostConnectionEvent
 
-    /**
-     * terminal.history.result: a read-only bounded capture. [text] is null when the host
-     * returned a rawRef-only body, which this client does not dereference (honest gap).
-     */
     data class TerminalHistoryResult(
+        val sessionId: SessionId,
         val terminalGeneration: ULong,
         val capturedAt: String,
-        val text: String?,
+        val text: String,
         val truncatedLines: Boolean,
         val truncatedBytes: Boolean,
     ) : HostConnectionEvent
@@ -111,6 +113,15 @@ interface HostConnector {
     val path: TransportPath
 
     suspend fun send(type: String, body: JsonObject, replyTo: String? = null)
+
+    fun activateTerminalInput(terminalGeneration: ULong) = Unit
+
+    fun deactivateTerminalInput(terminalGeneration: ULong) = Unit
+
+    fun submitTerminalInput(terminalGeneration: ULong, bytes: ByteArray): Deferred<Unit> =
+        CompletableDeferred<Unit>().also {
+            it.completeExceptionally(IllegalStateException("TERMINAL_INPUT_SUBMISSION_UNSUPPORTED"))
+        }
 
     suspend fun sendTerminalInput(terminalGeneration: ULong, sequence: ULong, bytes: ByteArray)
 

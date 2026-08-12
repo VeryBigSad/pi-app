@@ -7,172 +7,171 @@ import org.junit.Test
 
 class VoiceTranscriptTest {
     private val sink = RecordingSink()
-    private val gate = VoiceTranscriptGate(sink)
+    private val gate = VoiceTranscriptGate(sink).also { it.reset(GENERATION_A) }
 
     @Test
-    fun parsesPartialIntoDraftCallback() {
-        val rejection = gate.accept(
-            SESSION_ID,
-            "voice.partial",
-            body("""{"sessionId":"$SESSION_ID","chunkSequence":3,"revision":2,"text":"hello wor"}"""),
-        )
+    fun parsesCanonicalPartialIntoBoundDraftCallback() {
+        assertThat(gate.begin(STREAM_A, TARGET_A, GENERATION_A)).isNull()
+
+        val rejection = acceptA("voice.partial", partialBody(STREAM_A, 3u, 2u, "hello wor"))
 
         assertThat(rejection).isNull()
         assertThat(sink.partials).containsExactly(
-            VoiceTranscript(SESSION_ID, 3, 2, VoiceTranscriptKind.PARTIAL, "hello wor"),
+            TARGET_A to VoiceTranscript(STREAM_A, 3u, 2u, VoiceTranscriptKind.PARTIAL, "hello wor"),
         )
         assertThat(sink.finals).isEmpty()
     }
 
     @Test
-    fun parsesFinishIntoFinalDraftCallbackAndClosesSession() {
-        gate.accept(SESSION_ID, "voice.partial", partial(chunk = 0, revision = 0, text = "one"))
-
-        val rejection = gate.accept(
-            SESSION_ID,
-            "voice.finish",
-            body("""{"sessionId":"$SESSION_ID","chunkSequence":1,"text":"one two."}"""),
-        )
+    fun finalDraftClosesAndTombstonesStream() {
+        assertThat(gate.begin(STREAM_A, TARGET_A, GENERATION_A)).isNull()
+        acceptA("voice.partial", partialBody(STREAM_A, 0u, 1u, "one"))
+        val rejection = acceptA("voice.finish", finishBody(STREAM_A, 1u, "one two."))
 
         assertThat(rejection).isNull()
         assertThat(sink.finals).containsExactly(
-            VoiceTranscript(SESSION_ID, 1, 0, VoiceTranscriptKind.FINAL, "one two."),
+            TARGET_A to VoiceTranscript(STREAM_A, 1u, 0u, VoiceTranscriptKind.FINAL, "one two."),
         )
-        assertThat(
-            gate.accept(SESSION_ID, "voice.partial", partial(chunk = 2, revision = 0, text = "late")),
-        ).isEqualTo(VoiceTranscriptRejection.SESSION_CLOSED)
-        assertThat(sink.partials).hasSize(1)
+        assertThat(acceptA("voice.partial", partialBody(STREAM_A, 2u, 3u, "late")))
+            .isEqualTo(VoiceTranscriptRejection.SESSION_CLOSED)
+        assertThat(gate.begin(STREAM_A, TARGET_B, GENERATION_A))
+            .isEqualTo(VoiceTranscriptRejection.SESSION_CLOSED)
     }
 
     @Test
-    fun dropsDuplicateAndStaleRevisionsPerChunk() {
-        assertThat(gate.accept(SESSION_ID, "voice.partial", partial(0, 0, "a"))).isNull()
-        assertThat(gate.accept(SESSION_ID, "voice.partial", partial(0, 1, "ab"))).isNull()
-
-        assertThat(gate.accept(SESSION_ID, "voice.partial", partial(0, 1, "ab")))
+    fun dropsDuplicateStaleRevisionsAndOutOfOrderChunks() {
+        assertThat(gate.begin(STREAM_A, TARGET_A, GENERATION_A)).isNull()
+        assertThat(acceptA("voice.partial", partialBody(STREAM_A, 0u, 1u, "a"))).isNull()
+        assertThat(acceptA("voice.partial", partialBody(STREAM_A, 0u, 2u, "ab"))).isNull()
+        assertThat(acceptA("voice.partial", partialBody(STREAM_A, 0u, 2u, "ab")))
             .isEqualTo(VoiceTranscriptRejection.DUPLICATE)
-        assertThat(gate.accept(SESSION_ID, "voice.partial", partial(0, 0, "a")))
+        assertThat(acceptA("voice.partial", partialBody(STREAM_A, 0u, 1u, "a")))
             .isEqualTo(VoiceTranscriptRejection.STALE)
-
-        assertThat(sink.partials.map(VoiceTranscript::text)).containsExactly("a", "ab").inOrder()
+        assertThat(acceptA("voice.partial", partialBody(STREAM_A, 4u, 3u, "newer"))).isNull()
+        assertThat(acceptA("voice.partial", partialBody(STREAM_A, 3u, 4u, "older")))
+            .isEqualTo(VoiceTranscriptRejection.STALE)
+        assertThat(sink.partials.map { it.second.text }).containsExactly("a", "ab", "newer").inOrder()
     }
 
     @Test
-    fun dropsOutOfOrderChunksAndLatePartialsAfterFinal() {
-        assertThat(gate.accept(SESSION_ID, "voice.partial", partial(4, 0, "newer"))).isNull()
+    fun cancelRejectsLateResultsAndNextStreamReordering() {
+        assertThat(gate.begin(STREAM_A, TARGET_A, GENERATION_A)).isNull()
+        assertThat(gate.cancel(STREAM_A, GENERATION_A)).isNull()
+        assertThat(gate.begin(STREAM_B, TARGET_B, GENERATION_A)).isNull()
 
-        assertThat(gate.accept(SESSION_ID, "voice.partial", partial(3, 0, "older")))
-            .isEqualTo(VoiceTranscriptRejection.STALE)
-        assertThat(gate.accept(SESSION_ID, "voice.partial", partial(4, 1, "newer!"))).isNull()
-
-        assertThat(
-            gate.accept(SESSION_ID, "voice.finish", body("""{"sessionId":"$SESSION_ID","chunkSequence":5,"text":"done"}""")),
-        ).isNull()
-        assertThat(gate.accept(SESSION_ID, "voice.partial", partial(5, 7, "late")))
+        assertThat(acceptA("voice.finish", finishBody(STREAM_A, 0u, "late A")))
             .isEqualTo(VoiceTranscriptRejection.SESSION_CLOSED)
-
-        assertThat(sink.partials.map(VoiceTranscript::text)).containsExactly("newer", "newer!").inOrder()
-    }
-
-    @Test
-    fun rejectsMismatchedSessionIds() {
-        assertThat(gate.accept(OTHER_SESSION_ID, "voice.partial", partial(0, 0, "a")))
-            .isEqualTo(VoiceTranscriptRejection.MALFORMED)
-        assertThat(gate.accept(SESSION_ID, "voice.partial", body("""{"sessionId":"$OTHER_SESSION_ID","chunkSequence":0,"revision":0,"text":"a"}""")))
-            .isEqualTo(VoiceTranscriptRejection.MALFORMED)
-        assertThat(sink.partials).isEmpty()
-    }
-
-    @Test
-    fun rejectsMalformedBodies() {
-        assertThat(gate.accept(SESSION_ID, "voice.partial", body("""{"sessionId":"$SESSION_ID","chunkSequence":0,"revision":0}""")))
-            .isEqualTo(VoiceTranscriptRejection.MALFORMED)
-        assertThat(gate.accept(SESSION_ID, "voice.partial", body("""{"sessionId":"$SESSION_ID","chunkSequence":0,"text":"a"}""")))
-            .isEqualTo(VoiceTranscriptRejection.MALFORMED)
-        assertThat(gate.accept(SESSION_ID, "voice.partial", body("""{"sessionId":"$SESSION_ID","chunkSequence":-1,"revision":0,"text":"a"}""")))
-            .isEqualTo(VoiceTranscriptRejection.MALFORMED)
-        assertThat(gate.accept(SESSION_ID, "voice.partial", body("""{"sessionId":"$SESSION_ID","chunkSequence":0,"revision":0,"text":""}""")))
-            .isEqualTo(VoiceTranscriptRejection.MALFORMED)
-        assertThat(gate.accept(SESSION_ID, "voice.partial", body("""not json""")))
-            .isEqualTo(VoiceTranscriptRejection.MALFORMED)
-        assertThat(gate.accept(SESSION_ID, "voice.partial", body("""{"sessionId":"$SESSION_ID","chunkSequence":0,"revision":0,"text":"a"}""".dropLast(1))))
-            .isEqualTo(VoiceTranscriptRejection.MALFORMED)
-        assertThat(gate.accept(SESSION_ID, "voice.unknown", partial(0, 0, "a")))
-            .isEqualTo(VoiceTranscriptRejection.MALFORMED)
-        assertThat(gate.accept(SESSION_ID, "voice.partial", body("""{"sessionId":"$SESSION_ID","chunkSequence":0,"revision":0,"text":"a","extra":"tolerated"}""")))
+        assertThat(gate.accept(GENERATION_A, STREAM_B, "voice.partial", partialBody(STREAM_B, 0u, 1u, "B")))
             .isNull()
+        assertThat(acceptA("voice.partial", partialBody(STREAM_A, 1u, 2u, "later A")))
+            .isEqualTo(VoiceTranscriptRejection.SESSION_CLOSED)
+        assertThat(sink.partials).containsExactly(
+            TARGET_B to VoiceTranscript(STREAM_B, 0u, 1u, VoiceTranscriptKind.PARTIAL, "B"),
+        )
     }
 
     @Test
-    fun rejectsOversizedBodiesAndText() {
-        val huge = """{"sessionId":"$SESSION_ID","chunkSequence":0,"revision":0,"text":"${"a".repeat(70_000)}"}"""
-        assertThat(gate.accept(SESSION_ID, "voice.partial", body(huge)))
-            .isEqualTo(VoiceTranscriptRejection.OVERSIZED)
+    fun reconnectTombstonesOldGenerationAndRejectsLateAAfterBStarts() {
+        assertThat(gate.begin(STREAM_A, TARGET_A, GENERATION_A)).isNull()
+        gate.reset(GENERATION_B)
+        assertThat(gate.begin(STREAM_B, TARGET_B, GENERATION_B)).isNull()
 
+        assertThat(gate.accept(GENERATION_A, STREAM_A, "voice.partial", partialBody(STREAM_A, 0u, 1u, "late")))
+            .isEqualTo(VoiceTranscriptRejection.STALE_GENERATION)
+        assertThat(gate.accept(GENERATION_B, STREAM_A, "voice.partial", partialBody(STREAM_A, 0u, 1u, "late")))
+            .isEqualTo(VoiceTranscriptRejection.SESSION_CLOSED)
+        assertThat(gate.accept(GENERATION_B, STREAM_B, "voice.finish", finishBody(STREAM_B, 0u, "current")))
+            .isNull()
+        assertThat(sink.finals.single().first).isEqualTo(TARGET_B)
+    }
+
+    @Test
+    fun beginBWithoutCancelTombstonesA() {
+        assertThat(gate.begin(STREAM_A, TARGET_A, GENERATION_A)).isNull()
+        assertThat(gate.begin(STREAM_B, TARGET_B, GENERATION_A)).isNull()
+
+        assertThat(acceptA("voice.partial", partialBody(STREAM_A, 0u, 1u, "A")))
+            .isEqualTo(VoiceTranscriptRejection.SESSION_CLOSED)
+        assertThat(gate.accept(GENERATION_A, STREAM_B, "voice.partial", partialBody(STREAM_B, 0u, 1u, "B")))
+            .isNull()
+        assertThat(sink.partials.single().first).isEqualTo(TARGET_B)
+    }
+
+    @Test
+    fun emptyFinalClosesSilentStreamWithoutDraft() {
+        assertThat(gate.begin(STREAM_A, TARGET_A, GENERATION_A)).isNull()
+        assertThat(acceptA("voice.finish", finishBody(STREAM_A, 0u, ""))).isNull()
+        assertThat(sink.finals).isEmpty()
+        assertThat(gate.begin(STREAM_B, TARGET_B, GENERATION_A)).isNull()
+    }
+
+    @Test
+    fun rejectsNoncanonicalDecimalAndMalformedBodies() {
+        assertThat(gate.begin(STREAM_A, TARGET_A, GENERATION_A)).isNull()
+        for (invalid in listOf(
+            """{"sessionId":"$STREAM_A","chunkSequence":0,"revision":"1","text":"a"}""",
+            """{"sessionId":"$STREAM_A","chunkSequence":"00","revision":"1","text":"a"}""",
+            """{"sessionId":"$STREAM_A","chunkSequence":"0","revision":1,"text":"a"}""",
+            """{"sessionId":"$STREAM_A","chunkSequence":"0","revision":"01","text":"a"}""",
+            """{"sessionId":"$STREAM_A","chunkSequence":"18446744073709551616","revision":"1","text":"a"}""",
+            """{"sessionId":"$STREAM_A","chunkSequence":"0","revision":"1","text":""}""",
+            "not json",
+        )) {
+            assertThat(acceptA("voice.partial", body(invalid))).isEqualTo(VoiceTranscriptRejection.MALFORMED)
+        }
+    }
+
+    @Test
+    fun acceptsUint64MaxAndRejectsOversizedTextOrBody() {
+        assertThat(gate.begin(STREAM_A, TARGET_A, GENERATION_A)).isNull()
+        assertThat(acceptA("voice.partial", partialBody(STREAM_A, ULong.MAX_VALUE, ULong.MAX_VALUE, "max"))).isNull()
+        val huge = """{"sessionId":"$STREAM_A","chunkSequence":"0","revision":"1","text":"${"a".repeat(70_000)}"}"""
+        assertThat(acceptA("voice.partial", body(huge))).isEqualTo(VoiceTranscriptRejection.OVERSIZED)
         val longText = "a".repeat(17_000)
-        val padded = """{"sessionId":"$SESSION_ID","chunkSequence":0,"revision":0,"text":"$longText"}"""
-        assertThat(gate.accept(SESSION_ID, "voice.partial", body(padded)))
+        assertThat(acceptA("voice.partial", partialBody(STREAM_A, 0u, 1u, longText)))
             .isEqualTo(VoiceTranscriptRejection.MALFORMED)
     }
 
     @Test
-    fun finishSuppressesLaterDuplicateFinals() {
-        val finish = body("""{"sessionId":"$SESSION_ID","chunkSequence":0,"text":"final."}""")
-
-        assertThat(gate.accept(SESSION_ID, "voice.finish", finish)).isNull()
-        assertThat(gate.accept(SESSION_ID, "voice.finish", finish))
-            .isEqualTo(VoiceTranscriptRejection.SESSION_CLOSED)
-
-        assertThat(sink.finals).hasSize(1)
-    }
-
-    @Test
-    fun resetAllowsANewSessionSequence() {
-        gate.accept(SESSION_ID, "voice.partial", partial(9, 0, "old"))
-        gate.accept(SESSION_ID, "voice.finish", body("""{"sessionId":"$SESSION_ID","chunkSequence":10,"text":"old final"}"""))
-
-        gate.reset()
-
-        assertThat(gate.accept(OTHER_SESSION_ID, "voice.partial", partialBody(OTHER_SESSION_ID, 0, 0, "new"))).isNull()
-        assertThat(sink.partials.map(VoiceTranscript::text)).containsExactly("old", "new").inOrder()
-    }
-
-    @Test
-    fun transcriptModelValidatesInvariants() {
+    fun transcriptModelValidatesIdentityAndFinalRevision() {
         assertThrows(IllegalArgumentException::class.java) {
-            VoiceTranscript("not-a-uuid", 0, 0, VoiceTranscriptKind.PARTIAL, "x")
+            VoiceTranscript("not-a-uuid", 0u, 0u, VoiceTranscriptKind.PARTIAL, "x")
         }
         assertThrows(IllegalArgumentException::class.java) {
-            VoiceTranscript(SESSION_ID, -1, 0, VoiceTranscriptKind.PARTIAL, "x")
-        }
-        assertThrows(IllegalArgumentException::class.java) {
-            VoiceTranscript(SESSION_ID, 0, 1, VoiceTranscriptKind.FINAL, "x")
+            VoiceTranscript(STREAM_A, 0u, 1u, VoiceTranscriptKind.FINAL, "x")
         }
     }
+
+    private fun acceptA(type: String, body: ByteArray): VoiceTranscriptRejection? =
+        gate.accept(GENERATION_A, STREAM_A, type, body)
 
     private class RecordingSink : VoiceTranscriptSink {
-        val partials = CopyOnWriteArrayList<VoiceTranscript>()
-        val finals = CopyOnWriteArrayList<VoiceTranscript>()
+        val partials = CopyOnWriteArrayList<Pair<String, VoiceTranscript>>()
+        val finals = CopyOnWriteArrayList<Pair<String, VoiceTranscript>>()
 
-        override fun onPartialDraft(transcript: VoiceTranscript) {
-            partials += transcript
+        override fun onPartialDraft(targetSessionId: String, transcript: VoiceTranscript) {
+            partials += targetSessionId to transcript
         }
 
-        override fun onFinalDraft(transcript: VoiceTranscript) {
-            finals += transcript
+        override fun onFinalDraft(targetSessionId: String, transcript: VoiceTranscript) {
+            finals += targetSessionId to transcript
         }
     }
 
     private companion object {
-        const val SESSION_ID = "123e4567-e89b-42d3-a456-426614174000"
-        const val OTHER_SESSION_ID = "123e4567-e89b-42d3-a456-426614174999"
+        const val STREAM_A = "123e4567-e89b-42d3-a456-426614174000"
+        const val STREAM_B = "123e4567-e89b-42d3-a456-426614174999"
+        const val TARGET_A = "223e4567-e89b-42d3-a456-426614174000"
+        const val TARGET_B = "223e4567-e89b-42d3-a456-426614174999"
+        const val GENERATION_A = 7L
+        const val GENERATION_B = 8L
 
         fun body(json: String): ByteArray = json.toByteArray(Charsets.UTF_8)
 
-        fun partial(chunk: Long, revision: Int, text: String): ByteArray =
-            partialBody(SESSION_ID, chunk, revision, text)
+        fun partialBody(sessionId: String, chunk: ULong, revision: ULong, text: String): ByteArray =
+            body("""{"sessionId":"$sessionId","chunkSequence":"$chunk","revision":"$revision","text":"$text"}""")
 
-        fun partialBody(sessionId: String, chunk: Long, revision: Int, text: String): ByteArray =
-            body("""{"sessionId":"$sessionId","chunkSequence":$chunk,"revision":$revision,"text":"$text"}""")
+        fun finishBody(sessionId: String, chunk: ULong, text: String): ByteArray =
+            body("""{"sessionId":"$sessionId","chunkSequence":"$chunk","text":"$text"}""")
     }
 }

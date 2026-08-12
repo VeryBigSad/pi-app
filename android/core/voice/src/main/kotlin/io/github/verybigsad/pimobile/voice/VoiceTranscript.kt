@@ -3,12 +3,10 @@ package io.github.verybigsad.pimobile.voice
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.longOrNull
 
 private const val MAX_TRANSCRIPT_MESSAGE_BYTES = 64 * 1_024
 private const val MAX_TRANSCRIPT_TEXT_CHARS = 16 * 1_024
-private const val MAX_TRACKED_CHUNKS_PER_SESSION = 1_024
+private val CANONICAL_UINT64 = Regex("^(0|[1-9][0-9]{0,19})$")
 
 enum class VoiceTranscriptKind(val wireType: String) {
     PARTIAL("voice.partial"),
@@ -19,99 +17,147 @@ enum class VoiceTranscriptRejection {
     OVERSIZED,
     MALFORMED,
     UNKNOWN_SESSION,
+    STALE_GENERATION,
     STALE,
     DUPLICATE,
     SESSION_CLOSED,
 }
 
-/**
- * One ordered host transcript result for an uploaded chunk.
- */
 data class VoiceTranscript(
     val sessionId: String,
-    val chunkSequence: Long,
-    val revision: Int,
+    val chunkSequence: ULong,
+    val revision: ULong,
     val kind: VoiceTranscriptKind,
     val text: String,
 ) {
     init {
         require(isVoiceSessionId(sessionId))
-        require(chunkSequence >= 0)
-        require(revision >= 0)
-        require(kind == VoiceTranscriptKind.PARTIAL || revision == 0)
+        require(kind == VoiceTranscriptKind.PARTIAL || revision == 0uL)
         require(text.length <= MAX_TRANSCRIPT_TEXT_CHARS)
     }
 }
 
-/**
- * Editable-draft callback surface consumed by the composer. Partial drafts are
- * provisional and must never overwrite manually typed text; the final draft is
- * inserted as editable text and is never auto-sent.
- */
 interface VoiceTranscriptSink {
-    fun onPartialDraft(transcript: VoiceTranscript)
+    fun onPartialDraft(targetSessionId: String, transcript: VoiceTranscript)
 
-    fun onFinalDraft(transcript: VoiceTranscript)
+    fun onFinalDraft(targetSessionId: String, transcript: VoiceTranscript)
 }
 
-/**
- * Parses inbound `voice.partial` / `voice.finish` message bodies and delivers
- * them to the attached sink with strict per-session ordering and dedup: chunks
- * arrive in ascending order, partial revisions are monotonic per chunk, a final
- * draft closes its session, and late or duplicate results are dropped.
- */
 class VoiceTranscriptGate(
     private val sink: VoiceTranscriptSink,
 ) {
     private val lock = Any()
-    private val chunks = HashMap<Long, ChunkProgress>()
-    private var highestDeliveredChunk = -1L
-    private var sessionClosed = false
+    private val chunks = HashMap<ULong, ChunkProgress>()
+    private val tombstones = LinkedHashSet<String>()
+    private var highestDeliveredChunk: ULong? = null
+    private var connectionGeneration: Long? = null
+    private var active: ActiveStream? = null
 
-    fun accept(sessionId: String, type: String, body: ByteArray): VoiceTranscriptRejection? {
+    fun reset(connectionGeneration: Long) {
+        synchronized(lock) {
+            if (this.connectionGeneration == connectionGeneration) return
+            active?.let { tombstoneLocked(it.streamId) }
+            clearProgressLocked()
+            active = null
+            this.connectionGeneration = connectionGeneration
+        }
+    }
+
+    fun begin(streamId: String, targetSessionId: String, connectionGeneration: Long): VoiceTranscriptRejection? =
+        synchronized(lock) {
+            if (this.connectionGeneration != connectionGeneration) return@synchronized VoiceTranscriptRejection.STALE_GENERATION
+            if (!isVoiceSessionId(streamId) || !isVoiceSessionId(targetSessionId)) {
+                return@synchronized VoiceTranscriptRejection.MALFORMED
+            }
+            if (streamId in tombstones) return@synchronized VoiceTranscriptRejection.SESSION_CLOSED
+            active?.let { tombstoneLocked(it.streamId) }
+            clearProgressLocked()
+            active = ActiveStream(streamId, targetSessionId)
+            null
+        }
+
+    fun cancel(streamId: String, connectionGeneration: Long): VoiceTranscriptRejection? =
+        close(streamId, connectionGeneration)
+
+    fun finish(streamId: String, connectionGeneration: Long): VoiceTranscriptRejection? =
+        close(streamId, connectionGeneration)
+
+    fun accept(
+        connectionGeneration: Long,
+        streamId: String,
+        type: String,
+        body: ByteArray,
+    ): VoiceTranscriptRejection? {
         val kind = when (type) {
             VoiceTranscriptKind.PARTIAL.wireType -> VoiceTranscriptKind.PARTIAL
             VoiceTranscriptKind.FINAL.wireType -> VoiceTranscriptKind.FINAL
             else -> return VoiceTranscriptRejection.MALFORMED
         }
-        if (body.isEmpty() || body.size > MAX_TRANSCRIPT_MESSAGE_BYTES) {
-            return VoiceTranscriptRejection.OVERSIZED
-        }
-        val transcript = parse(sessionId, kind, body) ?: return VoiceTranscriptRejection.MALFORMED
+        if (body.isEmpty() || body.size > MAX_TRANSCRIPT_MESSAGE_BYTES) return VoiceTranscriptRejection.OVERSIZED
+        val transcript = parse(streamId, kind, body) ?: return VoiceTranscriptRejection.MALFORMED
         synchronized(lock) {
-            if (sessionClosed) return VoiceTranscriptRejection.SESSION_CLOSED
-            if (transcript.chunkSequence < highestDeliveredChunk) return VoiceTranscriptRejection.STALE
-            if (transcript.chunkSequence >= MAX_TRACKED_CHUNKS_PER_SESSION.toLong()) {
-                return VoiceTranscriptRejection.MALFORMED
+            if (this.connectionGeneration != connectionGeneration) return VoiceTranscriptRejection.STALE_GENERATION
+            val binding = active
+            if (binding == null || binding.streamId != streamId) {
+                return if (streamId in tombstones) {
+                    VoiceTranscriptRejection.SESSION_CLOSED
+                } else {
+                    VoiceTranscriptRejection.UNKNOWN_SESSION
+                }
             }
+            val highest = highestDeliveredChunk
+            if (highest != null && transcript.chunkSequence < highest) return VoiceTranscriptRejection.STALE
+            if (highest == null || transcript.chunkSequence > highest) chunks.clear()
             val progress = chunks.getOrPut(transcript.chunkSequence) { ChunkProgress() }
             when {
                 progress.finalDelivered -> return VoiceTranscriptRejection.DUPLICATE
                 transcript.kind == VoiceTranscriptKind.FINAL -> progress.finalDelivered = true
-                transcript.revision < progress.highestPartialRevision -> return VoiceTranscriptRejection.STALE
+                progress.highestPartialRevision != null && transcript.revision < progress.highestPartialRevision!! -> return VoiceTranscriptRejection.STALE
                 transcript.revision == progress.highestPartialRevision -> return VoiceTranscriptRejection.DUPLICATE
                 else -> progress.highestPartialRevision = transcript.revision
             }
-            if (transcript.chunkSequence > highestDeliveredChunk) {
-                highestDeliveredChunk = transcript.chunkSequence
+            if (highest == null || transcript.chunkSequence > highest) highestDeliveredChunk = transcript.chunkSequence
+            if (transcript.text.isNotEmpty()) {
+                when (transcript.kind) {
+                    VoiceTranscriptKind.PARTIAL -> sink.onPartialDraft(binding.targetSessionId, transcript)
+                    VoiceTranscriptKind.FINAL -> sink.onFinalDraft(binding.targetSessionId, transcript)
+                }
             }
-            if (transcript.kind == VoiceTranscriptKind.FINAL) {
-                sessionClosed = true
-            }
-        }
-        when (transcript.kind) {
-            VoiceTranscriptKind.PARTIAL -> sink.onPartialDraft(transcript)
-            VoiceTranscriptKind.FINAL -> sink.onFinalDraft(transcript)
+            if (transcript.kind == VoiceTranscriptKind.FINAL) closeLocked(binding)
         }
         return null
     }
 
-    fun reset() {
-        synchronized(lock) {
-            chunks.clear()
-            highestDeliveredChunk = -1L
-            sessionClosed = false
+    private fun close(streamId: String, connectionGeneration: Long): VoiceTranscriptRejection? = synchronized(lock) {
+        if (this.connectionGeneration != connectionGeneration) return@synchronized VoiceTranscriptRejection.STALE_GENERATION
+        val binding = active
+        if (binding == null || binding.streamId != streamId) {
+            return@synchronized if (streamId in tombstones) {
+                VoiceTranscriptRejection.SESSION_CLOSED
+            } else {
+                VoiceTranscriptRejection.UNKNOWN_SESSION
+            }
         }
+        closeLocked(binding)
+        null
+    }
+
+    private fun closeLocked(binding: ActiveStream) {
+        tombstoneLocked(binding.streamId)
+        active = null
+        clearProgressLocked()
+    }
+
+    private fun tombstoneLocked(streamId: String) {
+        tombstones += streamId
+        while (tombstones.size > MAX_TOMBSTONES) {
+            tombstones.remove(tombstones.first())
+        }
+    }
+
+    private fun clearProgressLocked() {
+        chunks.clear()
+        highestDeliveredChunk = null
     }
 
     private fun parse(sessionId: String, kind: VoiceTranscriptKind, body: ByteArray): VoiceTranscript? {
@@ -123,28 +169,33 @@ class VoiceTranscriptGate(
         if (root !is JsonObject) return null
         val bodySessionId = (root["sessionId"] as? JsonPrimitive)?.takeIf { it.isString }?.content
         if (bodySessionId != sessionId || !isVoiceSessionId(sessionId)) return null
-        val chunkSequence = (root["chunkSequence"] as? JsonPrimitive)?.longOrNull ?: return null
+        val chunkSequence = root.canonicalUint64("chunkSequence") ?: return null
         val revision = when (kind) {
-            VoiceTranscriptKind.PARTIAL -> (root["revision"] as? JsonPrimitive)?.intOrNull ?: return null
-            VoiceTranscriptKind.FINAL -> 0
+            VoiceTranscriptKind.PARTIAL -> root.canonicalUint64("revision") ?: return null
+            VoiceTranscriptKind.FINAL -> 0uL
         }
         val text = (root["text"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return null
-        if (text.isEmpty()) return null
-        return try {
-            VoiceTranscript(
-                sessionId = sessionId,
-                chunkSequence = chunkSequence,
-                revision = revision,
-                kind = kind,
-                text = text,
-            )
-        } catch (_: IllegalArgumentException) {
-            null
-        }
+        if (kind == VoiceTranscriptKind.PARTIAL && text.isEmpty()) return null
+        return runCatching { VoiceTranscript(sessionId, chunkSequence, revision, kind, text) }.getOrNull()
     }
 
+    private data class ActiveStream(
+        val streamId: String,
+        val targetSessionId: String,
+    )
+
     private class ChunkProgress {
-        var highestPartialRevision = -1
+        var highestPartialRevision: ULong? = null
         var finalDelivered = false
     }
+
+    private companion object {
+        const val MAX_TOMBSTONES = 256
+    }
+}
+
+private fun JsonObject.canonicalUint64(name: String): ULong? {
+    val primitive = this[name] as? JsonPrimitive ?: return null
+    if (!primitive.isString || !CANONICAL_UINT64.matches(primitive.content)) return null
+    return primitive.content.toULongOrNull()
 }

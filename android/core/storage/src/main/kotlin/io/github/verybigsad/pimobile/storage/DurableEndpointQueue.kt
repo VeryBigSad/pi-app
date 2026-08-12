@@ -18,9 +18,8 @@ import kotlinx.serialization.json.put
  * operation is fsynced to disk; the coordinator drains it onto the READY connection.
  *
  * Owned by core/storage: it is a durable, atomically written queue under noBackupFilesDir.
- * push.endpoint on the wire requires wakePublicKey, which only exists when the distributor
- * supplies a VAPID public key; operations without one are retained but not sent (honest
- * pending state).
+ * wakePublicKey remains nullable for keyless ntfy/UnifiedPush distributors; queued
+ * registrations are drained with the field omitted.
  */
 class DurableEndpointQueue(context: Context) {
     private val file = AtomicFile(File(context.noBackupFilesDir, "push-endpoint-ops.json"))
@@ -44,6 +43,11 @@ class DurableEndpointQueue(context: Context) {
 
     suspend fun remove(endpointId: String) = lock.withLock {
         writeAll(readAll().filterNot { it.endpointId == endpointId })
+    }
+
+    /** Drops operations whose target host is no longer trusted. */
+    suspend fun clear() = lock.withLock {
+        writeAll(emptyList())
     }
 
     private fun readAll(): List<Operation> {

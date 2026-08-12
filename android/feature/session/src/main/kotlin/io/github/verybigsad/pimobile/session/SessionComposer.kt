@@ -28,6 +28,8 @@ import io.github.verybigsad.pimobile.model.SessionRunState
 internal fun SessionComposer(
     draft: DraftState,
     runState: SessionRunState,
+    commandNotice: CommandNoticeUiState?,
+    voicePermission: VoicePermissionUiState?,
     enabled: Boolean,
     onEvent: (SessionDetailEvent) -> Unit,
     modifier: Modifier = Modifier,
@@ -54,6 +56,16 @@ internal fun SessionComposer(
                     onInsert = { onEvent(SessionDetailEvent.InsertTranscription) },
                     onDiscard = { onEvent(SessionDetailEvent.DiscardTranscription) },
                 )
+            }
+            commandNotice?.let { notice ->
+                Text(
+                    text = notice.message(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            voicePermission?.let { notice ->
+                VoicePermissionNotice(notice, enabled, onEvent)
             }
             OutlinedTextField(
                 value = draft.typedText,
@@ -129,6 +141,68 @@ internal fun SessionComposer(
             QuickReplies(enabled = enabled, onEvent = onEvent)
         }
     }
+}
+
+@Composable
+private fun VoicePermissionNotice(
+    notice: VoicePermissionUiState,
+    enabled: Boolean,
+    onEvent: (SessionDetailEvent) -> Unit,
+) {
+    val permanentlyDenied = notice is VoicePermissionUiState.PermanentlyDenied
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
+        shape = RoundedCornerShape(18.dp),
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "Microphone access needed",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onTertiaryContainer,
+            )
+            Text(
+                text = if (permanentlyDenied) {
+                    "Microphone access is blocked in Android settings. Enable it there, then tap Voice again."
+                } else {
+                    "Microphone access was denied. You can ask Android again when you are ready."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onTertiaryContainer,
+            )
+            CompactTextButton(
+                label = if (permanentlyDenied) "Open settings" else "Allow microphone",
+                description = if (permanentlyDenied) {
+                    "Open Android app settings to enable microphone access"
+                } else {
+                    "Ask Android for microphone access again"
+                },
+                onClick = {
+                    onEvent(
+                        if (permanentlyDenied) {
+                            SessionDetailEvent.OpenVoicePermissionSettings
+                        } else {
+                            SessionDetailEvent.StartVoice
+                        },
+                    )
+                },
+                enabled = enabled,
+                outlined = false,
+            )
+        }
+    }
+}
+
+private fun CommandNoticeUiState.message(): String = when (this) {
+    CommandNoticeUiState.Sending -> "Sending command…"
+    CommandNoticeUiState.AwaitingHost -> "Command sent. Waiting for the Mac to confirm it."
+    CommandNoticeUiState.Acknowledged -> "Command accepted by the Mac."
+    is CommandNoticeUiState.Failed -> if (retryable) "Command was not confirmed ($code). Draft preserved; retry when ready."
+    else "Command failed ($code). Draft preserved."
 }
 
 @Composable

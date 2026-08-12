@@ -145,7 +145,7 @@ Counter-evidence deliberately retained: several other GitHub Pages sites return 
 | AVDs | Google APIs `PiApp_API_29`, `domonap`, `PiApp_API_36`; no-Google UI `PiApp_API_34_AOSP_UI`; headless `PiApp_API_34_AOSP`; unsupported negative `PiApp_API_28` |
 | API 29 WebView | 91.0.4472.114; xterm audit requires local `structuredClone` shim/canary |
 | JDK | Temurin 21.0.8 and 25.0.2; no system Gradle, so the wrapper is mandatory |
-| Node / Go / Terraform | 22.23.2 / 1.26.2 / 1.5.7 |
+| Node / Go / Terraform | 22.23.2 / 1.26.5 / 1.5.7 |
 | Groq key | `~/.groq_key`, mode `0600`, 57 bytes. **Fixed mode:** read on the Mac at request time only, never serialized into a frame |
 | tmux | 3.5a; `capture-pane -e` and `pipe-pane` confirmed |
 | `@xterm/headless` | 6.0.0, CommonJS, per-cell attribute readback confirmed |

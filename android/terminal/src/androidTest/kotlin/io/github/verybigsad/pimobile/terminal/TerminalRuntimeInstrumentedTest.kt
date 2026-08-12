@@ -27,7 +27,10 @@ class TerminalRuntimeInstrumentedTest {
         val canaryLatch = CountDownLatch(1)
         val readyLatch = CountDownLatch(1)
         val inputLatch = CountDownLatch(1)
+        val styleCanaryLatch = CountDownLatch(1)
+        val styleCanaryApplied = AtomicReference<String>()
         lateinit var runtime: TerminalRuntime
+        lateinit var webView: WebView
 
         instrumentation.runOnMainSync {
             runtime = TerminalRuntime(context) { event ->
@@ -44,7 +47,7 @@ class TerminalRuntimeInstrumentedTest {
                     else -> Unit
                 }
             }
-            runtime.createWebView()
+            webView = runtime.createWebView()
         }
 
         assertTrue("terminal canary timed out", canaryLatch.await(20, TimeUnit.SECONDS))
@@ -61,8 +64,38 @@ class TerminalRuntimeInstrumentedTest {
         assertTrue("terminal page timed out", readyLatch.await(20, TimeUnit.SECONDS))
         instrumentation.runOnMainSync {
             runtime.startGeneration(ULong.MAX_VALUE)
+            assertTrue("pageReady must allow focus", runtime.focus())
             assertTrue(runtime.sendKey("A\u0000界"))
+            webView.evaluateJavascript(
+                """(() => {
+                    const propertyProbe = document.createElement('div');
+                    const attributeProbe = document.createElement('div');
+                    const styleElementProbe = document.createElement('div');
+                    const injectedStyle = document.createElement('style');
+                    propertyProbe.style.position = 'fixed';
+                    attributeProbe.setAttribute('style', 'position: absolute');
+                    styleElementProbe.className = 'terminal-runtime-style-test';
+                    injectedStyle.textContent = '.terminal-runtime-style-test { position: relative !important; }';
+                    document.head.append(injectedStyle);
+                    document.body.append(propertyProbe, attributeProbe, styleElementProbe);
+                    const result = [
+                        getComputedStyle(propertyProbe).position === 'fixed',
+                        getComputedStyle(attributeProbe).position === 'absolute',
+                        getComputedStyle(styleElementProbe).position === 'relative',
+                    ];
+                    injectedStyle.remove();
+                    propertyProbe.remove();
+                    attributeProbe.remove();
+                    styleElementProbe.remove();
+                    return result;
+                })()""",
+            ) {
+                styleCanaryApplied.set(it)
+                styleCanaryLatch.countDown()
+            }
         }
+        assertTrue("terminal style CSP probe timed out", styleCanaryLatch.await(20, TimeUnit.SECONDS))
+        assertEquals("property, attribute, and injected styles must apply", "[true,true,true]", styleCanaryApplied.get())
         assertTrue("binary terminal input timed out", inputLatch.await(20, TimeUnit.SECONDS))
         val actualInput = input.get()
         assertTrue("terminal incompatible: $actualCanary", actualCanary.compatible)

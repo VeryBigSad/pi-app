@@ -56,6 +56,24 @@ describe("HostStore", () => {
     expect(second.findDevice(device.deviceId)).toBeUndefined();
   });
 
+  it("persists a keyless push endpoint across reloads", async () => {
+    const path = await storePath();
+    const first = new HostStore(path);
+    await first.load(() => "550e8400-e29b-41d4-a716-446655440000");
+    await first.addDevice(device);
+    const keyless = {
+      deviceId: endpoint.deviceId,
+      endpointId: endpoint.endpointId,
+      distributor: endpoint.distributor,
+      endpoint: endpoint.endpoint,
+    };
+    await first.setPushEndpoint(keyless);
+
+    const second = new HostStore(path);
+    await second.load(() => "550e8400-e29b-41d4-a716-4466554400ff");
+    expect(second.pushEndpoint()).toEqual(keyless);
+  });
+
   it("clears a push endpoint only for the matching device and endpoint", async () => {
     const path = await storePath();
     const store = new HostStore(path);

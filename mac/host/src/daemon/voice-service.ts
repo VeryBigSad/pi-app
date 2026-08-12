@@ -1,4 +1,4 @@
-import type { VoiceAudioChunk, VoiceRuntime, VoiceTranscriptSink } from "../gateway/types.js";
+import type { VoiceAudioChunk, VoiceRuntime } from "../gateway/types.js";
 import { GroqTranscriber, VoiceError } from "../voice/groq-client.js";
 import { VoiceRateLedger } from "../voice/rate-ledger.js";
 import { TranscriptionQueue } from "../voice/transcription-queue.js";
@@ -21,8 +21,8 @@ export class VoiceService {
     this.queue = new TranscriptionQueue(transcriber);
   }
 
-  transcribe(chunkId: string, pcm16le: Buffer): Promise<string> {
-    return this.queue.submit(chunkId, pcm16le);
+  transcribe(chunkId: string, pcm16le: Buffer, signal?: AbortSignal): Promise<string> {
+    return this.queue.submit(chunkId, pcm16le, signal);
   }
 
   status(): { queueSize: number; limits: { requestsPerDay: number; audioSecondsPerDay: number } } {
@@ -41,22 +41,14 @@ export class VoiceService {
   }
 }
 
-/**
- * Bridges gateway voice.audio chunks into the Groq pipeline: every transcription
- * result is emitted as voice.partial (revision 1 for the chunk) and, when the
- * chunk is marked final, voice.finish closes it.
- */
 export class GatewayVoiceRuntime implements VoiceRuntime {
   constructor(private readonly voice: VoiceService) {}
 
-  async submit(chunk: VoiceAudioChunk, sink: VoiceTranscriptSink, signal: AbortSignal): Promise<void> {
+  async submit(chunk: VoiceAudioChunk, signal: AbortSignal): Promise<string> {
     signal.throwIfAborted();
-    const text = await this.voice.transcribe(`${chunk.sessionId}:${String(chunk.chunkSequence)}`, Buffer.from(chunk.pcm16le));
+    const text = await this.voice.transcribe(`${chunk.sessionId}:${chunk.chunkSequence.toString()}`, Buffer.from(chunk.pcm16le), signal);
     signal.throwIfAborted();
-    await sink.partial({ sessionId: chunk.sessionId, chunkSequence: chunk.chunkSequence, revision: 1, text }, signal);
-    if (chunk.final) {
-      await sink.finish({ sessionId: chunk.sessionId, chunkSequence: chunk.chunkSequence, text }, signal);
-    }
+    return text;
   }
 }
 

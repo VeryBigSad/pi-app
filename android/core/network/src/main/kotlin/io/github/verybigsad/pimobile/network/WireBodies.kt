@@ -21,7 +21,6 @@ private const val MAX_CATALOG_SESSION_BYTES = 4 * 1_024
 private const val MAX_VOICE_BODY_BYTES = 64 * 1_024
 private const val MAX_VOICE_TEXT_CHARS = 16_384
 private const val MAX_TERMINAL_HISTORY_ENTRIES = 5_000
-private const val MAX_TERMINAL_HISTORY_ENTRY_BYTES = 64 * 1_024
 private const val MAX_TERMINAL_HISTORY_BODY_BYTES = 1_024 * 1_024
 private const val MAX_ERROR_CODE_CHARS = 64
 private const val MAX_AGENT_SESSIONS = 512
@@ -278,6 +277,7 @@ object WireBodies {
 
     fun parseVoiceAudio(body: JsonObject): VoiceAudio {
         requireBodyBytes(body, MAX_VOICE_BODY_BYTES)
+        if ("audio" in body) malformed("audio")
         return VoiceAudio(
             sessionId = SessionId(body.requiredUuid("sessionId")),
             chunkSequence = body.requiredUint64("chunkSequence"),
@@ -323,50 +323,56 @@ object WireBodies {
 
     data class TerminalHistoryRequest(
         val sessionId: SessionId,
-        val beforeSequence: Uint64Decimal?,
-        val limit: Int,
+        val terminalGeneration: Uint64Decimal,
+        val maxLines: Int,
+        val maxBytes: Int,
     )
 
     fun parseTerminalHistoryRequest(body: JsonObject): TerminalHistoryRequest {
-        val limit = body.requiredInt("limit")
-        if (limit !in 1..MAX_TERMINAL_HISTORY_ENTRIES) malformed("limit")
+        val maxLines = body.requiredInt("maxLines")
+        val maxBytes = body.requiredInt("maxBytes")
+        if (maxLines !in 1..MAX_TERMINAL_HISTORY_ENTRIES || maxBytes !in 1..MAX_TERMINAL_HISTORY_BODY_BYTES) malformed("terminalHistoryBounds")
         return TerminalHistoryRequest(
             sessionId = SessionId(body.requiredUuid("sessionId")),
-            beforeSequence = body.optionalUint64("beforeSequence"),
-            limit = limit,
+            terminalGeneration = body.requiredUint64("terminalGeneration"),
+            maxLines = maxLines,
+            maxBytes = maxBytes,
         )
     }
 
     fun encodeTerminalHistoryRequest(request: TerminalHistoryRequest): JsonObject {
-        if (request.limit !in 1..MAX_TERMINAL_HISTORY_ENTRIES) malformed("limit")
+        if (request.maxLines !in 1..MAX_TERMINAL_HISTORY_ENTRIES || request.maxBytes !in 1..MAX_TERMINAL_HISTORY_BODY_BYTES) malformed("terminalHistoryBounds")
         return JsonObject(
             mapOf(
                 "sessionId" to JsonPrimitive(request.sessionId.value),
-                "beforeSequence" to (request.beforeSequence?.let { JsonPrimitive(it.text) } ?: JsonNull),
-                "limit" to JsonPrimitive(request.limit),
+                "terminalGeneration" to JsonPrimitive(request.terminalGeneration.text),
+                "maxLines" to JsonPrimitive(request.maxLines),
+                "maxBytes" to JsonPrimitive(request.maxBytes),
             ),
         )
     }
 
     data class TerminalHistoryResponse(
         val sessionId: SessionId,
-        val entries: List<String>,
-        val truncated: Boolean,
+        val terminalGeneration: Uint64Decimal,
+        val capturedAt: Instant,
+        val text: String,
+        val truncatedLines: Boolean,
+        val truncatedBytes: Boolean,
     )
 
     fun parseTerminalHistoryResponse(body: JsonObject): TerminalHistoryResponse {
         requireBodyBytes(body, MAX_TERMINAL_HISTORY_BODY_BYTES)
-        val values = body.requiredArray("entries")
-        if (values.size > MAX_TERMINAL_HISTORY_ENTRIES) malformed("entries")
-        val entries = values.map { value ->
-            val text = value.asString("entries")
-            if (text.encodeToByteArray().size > MAX_TERMINAL_HISTORY_ENTRY_BYTES) malformed("entries")
-            text
-        }
+        val text = body.requiredText("text", MAX_TERMINAL_HISTORY_BODY_BYTES)
+        val lineCount = if (text.isEmpty()) 0 else text.count { it == '\n' } + if (text.endsWith('\n')) 0 else 1
+        if (lineCount > MAX_TERMINAL_HISTORY_ENTRIES || text.encodeToByteArray().size > MAX_TERMINAL_HISTORY_BODY_BYTES) malformed("text")
         return TerminalHistoryResponse(
             sessionId = SessionId(body.requiredUuid("sessionId")),
-            entries = entries,
-            truncated = body.requiredBoolean("truncated"),
+            terminalGeneration = body.requiredUint64("terminalGeneration"),
+            capturedAt = parseDateTime(body.requiredString("capturedAt")),
+            text = text,
+            truncatedLines = body.requiredBoolean("truncatedLines"),
+            truncatedBytes = body.requiredBoolean("truncatedBytes"),
         )
     }
 
@@ -383,6 +389,12 @@ object WireBodies {
     private fun JsonObject.requiredString(name: String, maxChars: Int = 2_048): String {
         val value = (this[name] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: malformed(name)
         if (value.isEmpty() || value.length > maxChars || value.encodeToByteArray().size > maxChars) malformed(name)
+        return value
+    }
+
+    private fun JsonObject.requiredText(name: String, maxBytes: Int): String {
+        val value = (this[name] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: malformed(name)
+        if (value.length > maxBytes || value.encodeToByteArray().size > maxBytes) malformed(name)
         return value
     }
 

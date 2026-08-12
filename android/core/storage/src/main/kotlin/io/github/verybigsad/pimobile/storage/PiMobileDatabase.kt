@@ -12,7 +12,7 @@ import androidx.room.TypeConverters
         DraftEntity::class,
         TrustStateEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 @TypeConverters(StorageTypeConverters::class)

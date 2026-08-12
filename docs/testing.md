@@ -1,6 +1,6 @@
 # Testing strategy
 
-Last updated: 2026-08-11
+Last updated: 2026-08-12
 
 Rule that shapes everything below: **tests assert semantics, not shape.** A test that checks a field exists is not a test. Fault paths are as mandatory as happy paths, because every interesting failure here is a fault path: a dropped socket, a crash between journal states, a coalesced update, a denied approval, a chunk that returned out of order, a tmux pane that mangled a key release.
 
@@ -24,6 +24,18 @@ Vitest covers `protocol/**`, `mac/**`, `scripts/**` (see `vitest.config.ts`). Su
 
 Smoke helpers against real Pi: `npm run pi:smoke`, `npm run pi:smoke:daemon`.
 
+#### Opt-in live Mac-host Groq transcription
+
+This host-only live gate is macOS-only and excluded from normal `npm test` runs. It does not exercise Android, a phone microphone, PIMB transport, relay, composer integration, or phone-to-Mac E2E. It requires executable `/usr/bin/say` and `/usr/bin/afconvert`, plus an owner-only regular `~/.groq_key` with mode `0600`. Missing prerequisites fail when explicitly requested; without the opt-in flag, the test is reported as skipped.
+
+```bash
+PI_GROQ_LIVE=1 npx vitest run mac/host/test/voice-live.test.ts
+```
+
+`voice-live.test.ts` uses macOS text-to-speech to synthesize a fixed non-sensitive phrase, converts and validates it as 16 kHz mono s16le PCM, and passes those bytes directly through the Mac `GroqTranscriber`. It requires nonempty text and stable normalized fixture keywords, asserts a 2–8 second duration and ledger accounting for one to four provider attempts, then closes the ledger and removes its private temporary directory. Generated audio is enclosed by a mode-`0700` directory, normalized to mode `0600`, never retained as an artifact, and deleted even on failure. The key remains at `~/.groq_key`; the test suppresses tool output and never logs or persists the returned transcript. This proves the host/provider path only, not phone dictation E2E.
+
+Recorded local gate: 2026-08-12, one test passed in 1.84 seconds.
+
 ### Android / Gradle
 
 JDK 21 is mandatory; the build enforces it (`require(JavaVersion.current().isCompatibleWith(JavaVersion.VERSION_21))` in the root build). Temurin 21 is at `/Library/Java/JavaVirtualMachines/temurin-21.jdk`; JDK 25 is installed but is not the build JDK.
@@ -46,6 +58,8 @@ Scope to one module when iterating (do not run the aggregate for a focused chang
 
 Recorded green run: 113 connected tests, 0 failures, on AVD `PiApp_API_29` (Google APIs, WebView 91.0.4472.114) at serial `emulator-5590`. Modules covered: app launch + terminal canary, core security/network/storage/push/voice/update, feature session/agents/settings, terminal runtime.
 
+Voice permission coverage: coordinator unit tests prove one grant-triggered retry, denial without a retry loop, and stale-session rejection. Session instrumentation proves denied permission offers an explicit retry and permanent denial routes only to Android app settings. The ActivityResult ceremony is not synthetic-E2E-controlled; debug transcript hooks remain transcript-only.
+
 Always target the serial explicitly; never use unqualified `adb` when more than one device may exist:
 
 ```bash
@@ -57,6 +71,37 @@ ANDROID_SERIAL=emulator-5590 ./gradlew :android:core:update:connectedDebugAndroi
 ```
 
 API 34/36 and no-Google AOSP lanes are installed (`PiApp_API_36`, `domonap`, `PiApp_API_34_AOSP_UI`, `PiApp_API_34_AOSP`) but have **no recorded green run yet**; do not cite them as evidence. API 28 is a negative-only lane.
+
+### Installed-stack live E2E safety contract
+
+`npm run e2e:installed` is destructive only to one fresh host-owned E2E session and a fresh debug APK installation. It captures the original session-ID set, creates a new UUIDv4 semantic session through the mode-`0600` local admin socket, receives a random delete capability, seeds `PONG` through real `prompt` and `get_state` dispatches, and waits for that content in the canonical log. It never selects, trusts, or mutates an operator-supplied session. `--session-id` and `PI_E2E_SESSION_ID` are rejected.
+
+The run fails closed unless all of these are supplied:
+
+- `--allow-destructive-session` (or `PI_E2E_ALLOW_DESTRUCTIVE_SESSION=1`) acknowledges mutation of the harness-owned session. Without it the harness exits with `E2E_DESTRUCTIVE_SESSION_OPT_IN_REQUIRED` before session creation.
+- The target serial starts with `emulator-`; `adb emu avd name` must return exactly an allowlisted AVD name on its first line followed only by the emulator-console `OK` line, and `ro.kernel.qemu=1` is required. `ro.boot.qemu.avd_name`, when nonempty, must match that console identity; its absence is accepted for the valid API 29 AVD. Allowed names are `PiApp_API_29`, `PiApp_API_34_AOSP`, `PiApp_API_34_AOSP_UI`, `PiApp_API_36`, and `domonap`. Any physical device, unknown AVD, malformed console response, or inconsistent nonempty identity fails closed.
+- `--isolate-host-auth` is required for a fresh debug passkey ceremony against a real host. The owned E2E session is created and canonically seeded before the daemon stop, so it survives the isolation restart. Recovery is registered before that stop; it preserves private `0600` host/route backup outside artifacts, restores and verifies owner/device/instance/route state, then restarts and health-checks on every path.
+
+After APK build and installation, the harness captures a paired-device baseline immediately before pairing. Teardown revokes only IDs absent from that successfully captured baseline; if baseline capture never succeeds, it does not query or revoke devices. It then restores isolated host authentication when selected and presents the delete capability. The daemon stops the owned actor, transactionally removes that session's canonical state and records, removes only that session's command-journal rows, and removes only its checked `sessions/<uuid>` directory; it refuses traversal, symlinks, ownership mismatches, and pre-existing sessions. The harness verifies the original session-ID set is restored. Any cleanup failure fails E2E; an interrupted disposal remains capability-bound and can only be retried by that owned session's cleanup path.
+
+The pairing invitation remains in a random, mode-`0600`, one-use device channel; neither it nor host-state backup bytes are copied into artifacts. Release APK analysis remains part of the run, so debug hooks cannot appear in release.
+
+Safe final live invocation:
+
+```bash
+export JAVA_HOME=$(/usr/libexec/java_home -v 21)
+npm run e2e:installed -- \
+  --serial emulator-5590 \
+  --allow-destructive-session \
+  --isolate-host-auth \
+  --hooks voice,push
+```
+
+`voice` selects a debug-only deterministic host/Groq transcript hook. It injects a synthetic `voice.partial` then `voice.finish` through the production transcript gate and proves the selected session draft changes without auto-send. `push` selects a debug-only opaque wake hook: it first validates a bounded opaque wake ID, then drives the application wake/reconnect contract and observes the authenticated sync transition. Each selected hook atomically records only its stable pass/fail code into a bounded debug-only report; missing execution is `not-run`, never a pass. Unselected hooks are `not-selected`/skipped, not passed.
+
+A real UnifiedPush distributor callback cannot be deterministically supplied by a stock emulator. It is a separate explicit external gate: selecting `--hooks external-push` fails with `E2E_EXTERNAL_PUSH_DISTRIBUTOR_REQUIRED` until a configured distributor test environment is supplied. A green `voice,push` installed-stack run is therefore not evidence of distributor delivery, Doze, or physical-device wake behavior.
+
+After submitting the final reply canary, the 180-second reply deadline is only a timeout ceiling. The installed test polls sanitized state and fails immediately with a stable code for `SEQUENCE_GAP`, command rejection/indeterminate/send failure, or lost authentication/connection. Evidence retains those codes and bounded hook outcomes only; it never stores the canary prompt/reply, invitation, credentials, keys, or transcript content.
 
 ### Go relay
 
@@ -83,7 +128,7 @@ No `terraform apply` has been run; there is no cloud evidence.
 
 | Workflow | Contents |
 |---|---|
-| `ci.yml` | `node`: `npm ci`, `npm run check`, terminal verify, fixtures verify, DAL verify, `npm audit --audit-level=high`. `android`: JDK 21, unit tests, lint, assemble debug+release. `android-api29`: emulator-runner API 29 connectedDebugAndroidTest across app + all core + terminal + feature/session. `terraform`: fmt/init/validate. `go`: relay tests. |
+| `ci.yml` | `node`: `npm ci`, `npm run check`, terminal verify, fixtures verify, DAL verify, `npm audit --audit-level=high`. `supply-chain`: deterministic CycloneDX and SPDX SBOMs from npm lock/workspaces, resolved Gradle classpaths, and `go list -m`; fail-closed license policy; Grype high+ SCA for every CycloneDX SBOM and the locally rebuilt digest-pinned relay base-image closure. `android`: JDK 21, unit tests, lint, assemble debug+release. `android-api29`: emulator-runner API 29 connectedDebugAndroidTest across app + all core + terminal + feature/session. `terraform`: fmt/init/validate. `go`: relay tests. |
 | `dal.yml` | scheduled live DAL verification. |
 | `relay-image.yml` | relay image build/verify/publish with cosign keyless signature (identity pinned in cloud-init cosign policy). |
 | `secret-scan.yml` | gitleaks. |
@@ -104,7 +149,7 @@ No `terraform apply` has been run; there is no cloud evidence.
 | Fault injection | CI and emulator | Disconnects, gaps, epochs, crashes, malformed frames, clock skew | **partial** — covered within unit suites, no dedicated harness |
 | Terminal | Emulator plus real PTY | Rendering, keys, resize, reconnect, isolation | **exists, API 29 only** — canary + runtime instrumentation |
 | Security | CI | Replay, revocation, redaction, DAL, opacity, dependency scan | **exists** — security suites + `dal.yml` + `secret-scan.yml` |
-| Supply chain | CI | Locks, checksums, SBOM, SCA, licenses, secret scan, signed package smoke | **partial** — audit/secret-scan/identity scripts exist; SBOM/licenses job missing |
+| Supply chain | CI | Locks, checksums, CycloneDX SBOMs, high-severity SCA, fail-closed licenses, secret scan, signed package smoke | **exists** — `scripts/supply-chain.mjs`, exact license overrides, pinned Grype image, `npm audit`, `secret-scan.yml`, and relay image verification |
 | Performance | Physical device; emulator indicative only | Release-build Macrobenchmark against the budgets below | **missing** — no Macrobenchmark suite in tree |
 | Manual | Emulator and physical device | The matrices below, with sanitized artifacts | **pending** — physical device unavailable |
 
@@ -194,11 +239,11 @@ Implemented in `mac/host/src/voice/rate-ledger.ts` with fake-clock tests in `mac
 
 - billed seconds for 0.01/8/10/12.5-second uploads are 10/10/10/12.5; every retry adds another attempt/duration reservation;
 - cost is `billedSeconds / 3600 × $0.04`, including `$0.04` for 3,600 billed seconds and `$0.05` for 4,500;
-- defaults reject the next request at 18 RPM, 1,800 RPD, 6,480 ASH, or 25,920 ASD and allow it only after the exact sliding-window reset;
-- ledger state and reservations survive kill/restart; concurrent reservations cannot oversubscribe a window;
-- `$0.25` UTC-day and `$2.00` UTC-month boundaries reject before upload and roll over only at UTC boundaries;
-- 429 seconds/date headers use monotonic delay, malformed/missing headers use deterministic-seeded full jitter for tests, values over 120 seconds stop, and no more than three retries follow the first attempt;
-- every attempt consumes local request/audio/budget headroom, late duplicate chunk results are ignored, backlog above 30 seconds stops capture, and logs contain no audio/transcript.
+- configured RPM/RPD/ASH/ASD and UTC-day/month budgets are each filled in tests, then a wall-clock rollback is denied without changing billed duration or cost;
+- the persisted effective-time high-water survives restart; parallel child processes on separate SQLite connections cannot reopen a filled window after rollback;
+- a forward clock jump advances and pins effective time, so a later correction cannot reopen the jumped-to window;
+- Retry-After seconds/date parsing is tested, and a bounded 429 retry is charged as a second complete attempt;
+- first- and middle-chunk failures each abort the stream, emit one error, and suppress queued late partial/final completions; seam tests cover punctuation, case, contractions, Unicode normalization, repeated-token ambiguity, and no overlap.
 
 ## Performance budgets
 
@@ -267,4 +312,4 @@ Existing coverage is named in [requirements-traceability.md](requirements-tracea
 
 ## CI
 
-Current workflows are enumerated at the top of this document. Every commit runs node (lint/typecheck/tests/fixtures/DAL/audit), android (unit/lint/assemble ×2), android-api29 (instrumentation), terraform (fmt/validate), and go (relay). Pre-release still lacks: supply-chain SBOM/licenses job, Macrobenchmark/performance, and the manual matrices. Cross-language fixture parity is a hard gate and exists.
+Current workflows are enumerated at the top of this document. Every commit runs node (lint/typecheck/tests/fixtures/DAL/audit), supply-chain (SBOM/license/SCA/relay-image closure), android (unit/lint/assemble ×2), android-api29 (instrumentation), terraform (fmt/validate), and go (relay). SBOMs are deterministic CycloneDX run artifacts; licenses reject unknown, forbidden, and unallowlisted values, except exact reviewed coordinates in `supply-chain/license-policy.json`. Pre-release still lacks Macrobenchmark/performance and the manual matrices. Cross-language fixture parity is a hard gate and exists.

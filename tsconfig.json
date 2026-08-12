@@ -7,6 +7,7 @@
     { "path": "mac/approval" },
     { "path": "mac/preload" },
     { "path": "mac/pi-patch" },
-    { "path": "mac/compatibility" }
+    { "path": "mac/compatibility" },
+    { "path": "tests/e2e" }
   ]
 }

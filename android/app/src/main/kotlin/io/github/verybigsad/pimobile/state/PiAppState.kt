@@ -7,6 +7,8 @@ import io.github.verybigsad.pimobile.model.SessionId
 import io.github.verybigsad.pimobile.model.SessionState
 import io.github.verybigsad.pimobile.model.TrustState
 import io.github.verybigsad.pimobile.session.ApprovalOfferUiState
+import io.github.verybigsad.pimobile.session.CommandNoticeUiState
+import io.github.verybigsad.pimobile.session.VoicePermissionUiState
 import kotlinx.collections.immutable.PersistentMap
 import kotlinx.collections.immutable.persistentMapOf
 
@@ -39,6 +41,11 @@ data class SessionCatalogEntry(
     val provider: String?,
     val modelName: String?,
     val thinkingLevel: String?,
+)
+
+data class VoicePermissionRequest(
+    val requestId: Long,
+    val targetSessionId: SessionId,
 )
 
 enum class LockReason {
@@ -75,6 +82,10 @@ data class PiAppState(
     val approval: ApprovalOfferUiState? = null,
     /** Host-provided session catalog; null until session.catalog arrives, UI stays hidden. */
     val catalog: Map<SessionId, SessionCatalogEntry>? = null,
+    /** Per-session command feedback contains no payload and is discarded on process death. */
+    val commandNotices: Map<SessionId, CommandNoticeUiState> = emptyMap(),
+    val voicePermissionRequest: VoicePermissionRequest? = null,
+    val voicePermissionNotices: Map<SessionId, VoicePermissionUiState> = emptyMap(),
     val lastError: String? = null,
 ) {
     val locked: Boolean get() = authentication == null

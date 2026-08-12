@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -99,6 +99,32 @@ describe("HostDaemon composition", () => {
     })) as { type: string; command: string; success: boolean };
     expect(result).toMatchObject({ type: "response", command: "get_state", success: true });
     expect(daemon.status().sessions).toContain(sessionId);
+  });
+
+  it("creates and deletes only a capability-owned E2E session through admin", async () => {
+    const { root, daemon } = await fixture();
+    await daemon.start();
+    const existingSessionId = randomUUID();
+    await adminCall(daemon.paths().adminSocketPath, {
+      method: "sessions.run",
+      params: { sessionId: existingSessionId, operation: "get_state" },
+    });
+    const created = (await adminCall(daemon.paths().adminSocketPath, { method: "sessions.e2e.create" })) as {
+      sessionId: string;
+      deleteToken: string;
+    };
+    expect(created.sessionId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(created.deleteToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(daemon.status().sessions).toEqual(expect.arrayContaining([existingSessionId, created.sessionId]));
+    await expect(adminCall(daemon.paths().adminSocketPath, {
+      method: "sessions.e2e.delete",
+      params: { sessionId: existingSessionId, deleteToken: created.deleteToken },
+    })).rejects.toThrow("E2E_SESSION_OWNERSHIP_REQUIRED");
+    await adminCall(daemon.paths().adminSocketPath, { method: "sessions.e2e.delete", params: created });
+    expect(daemon.status().sessions).toEqual([existingSessionId]);
+    await expect(access(join(root, "sessions", created.sessionId))).rejects.toThrow();
+    await adminCall(daemon.paths().adminSocketPath, { method: "sessions.e2e.delete", params: created });
+    expect(daemon.status().sessions).toEqual([existingSessionId]);
   });
 
   it("rejects operations outside the allow-list", async () => {

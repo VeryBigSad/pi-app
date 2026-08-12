@@ -8,6 +8,8 @@ import io.github.verybigsad.pimobile.model.TransportPath
 import io.github.verybigsad.pimobile.model.TrustState
 import io.github.verybigsad.pimobile.notifications.NotificationPermissionStatus
 import io.github.verybigsad.pimobile.push.PushNotificationChannels
+import io.github.verybigsad.pimobile.push.ProviderUnavailableReason
+import io.github.verybigsad.pimobile.push.UnifiedPushProvider
 import io.github.verybigsad.pimobile.push.UnifiedPushProviderState
 import io.github.verybigsad.pimobile.push.UnifiedPushRegistrationState
 import io.github.verybigsad.pimobile.push.UnifiedPushState
@@ -23,6 +25,7 @@ import io.github.verybigsad.pimobile.settings.NotificationChannelUiState
 import io.github.verybigsad.pimobile.settings.NotificationPermissionState
 import io.github.verybigsad.pimobile.settings.NotificationSettingsUiState
 import io.github.verybigsad.pimobile.settings.PasskeySessionState
+import io.github.verybigsad.pimobile.settings.PushDistributorOption
 import io.github.verybigsad.pimobile.settings.PushDistributorState
 import io.github.verybigsad.pimobile.settings.SecuritySettingsUiState
 import io.github.verybigsad.pimobile.settings.SettingsUiState
@@ -97,28 +100,47 @@ object SettingsMappers {
         push: UnifiedPushState,
         permission: NotificationPermissionStatus,
         channels: List<NotificationChannelUiState>,
-    ): NotificationSettingsUiState = NotificationSettingsUiState(
-        distributor = when (val provider = push.provider) {
-            UnifiedPushProviderState.NotChecked -> PushDistributorState.Unavailable
-            is UnifiedPushProviderState.ProviderUnavailable -> PushDistributorState.NoneInstalled
-            is UnifiedPushProviderState.ProviderSelectionRequired -> PushDistributorState.NoneInstalled
-            is UnifiedPushProviderState.ProviderSelected -> PushDistributorState.Available(
-                distributorName = provider.packageName,
-                connected = push.registration is UnifiedPushRegistrationState.EndpointAvailable,
-            )
-        },
-        endpointRegistration = when (push.registration) {
-            is UnifiedPushRegistrationState.EndpointAvailable -> EndpointRegistrationState.REGISTERED
-            UnifiedPushRegistrationState.NotConfigured -> EndpointRegistrationState.UNKNOWN
-            else -> EndpointRegistrationState.NOT_REGISTERED
-        },
-        postNotificationsPermission = when (permission) {
-            NotificationPermissionStatus.GRANTED -> NotificationPermissionState.GRANTED
-            NotificationPermissionStatus.DENIED -> NotificationPermissionState.DENIED
-            NotificationPermissionStatus.NOT_REQUIRED -> NotificationPermissionState.NOT_REQUIRED
-        },
-        channels = channels,
-    )
+        providers: List<UnifiedPushProvider> = emptyList(),
+    ): NotificationSettingsUiState {
+        val options = providers.map { PushDistributorOption(it.packageName, it.displayName) }
+        return NotificationSettingsUiState(
+            distributor = when (val provider = push.provider) {
+                UnifiedPushProviderState.NotChecked -> PushDistributorState.Unavailable
+                is UnifiedPushProviderState.ProviderUnavailable -> when (provider.reason) {
+                    ProviderUnavailableReason.NO_DISTRIBUTOR -> PushDistributorState.NoneInstalled
+                    ProviderUnavailableReason.CONNECTOR_ERROR -> PushDistributorState.Unavailable
+                }
+                is UnifiedPushProviderState.ProviderSelectionRequired -> {
+                    options.takeIf { it.isNotEmpty() }
+                        ?.let(PushDistributorState::SelectionRequired)
+                        ?: PushDistributorState.Unavailable
+                }
+                is UnifiedPushProviderState.ProviderSelected -> PushDistributorState.Available(
+                    distributorName = providers.firstOrNull { it.packageName == provider.packageName }
+                        ?.displayName ?: provider.packageName,
+                    connected = push.registration is UnifiedPushRegistrationState.EndpointAvailable,
+                    alternatives = options,
+                )
+            },
+            endpointRegistration = when (push.registration) {
+                is UnifiedPushRegistrationState.EndpointAvailable -> EndpointRegistrationState.REGISTERED
+                UnifiedPushRegistrationState.RegistrationRequested -> {
+                    EndpointRegistrationState.REGISTRATION_REQUESTED
+                }
+                is UnifiedPushRegistrationState.RegistrationFailed,
+                is UnifiedPushRegistrationState.EndpointRejected,
+                UnifiedPushRegistrationState.EndpointUnregistrationRejected -> EndpointRegistrationState.FAILED
+                UnifiedPushRegistrationState.NotConfigured -> EndpointRegistrationState.UNKNOWN
+                else -> EndpointRegistrationState.NOT_REGISTERED
+            },
+            postNotificationsPermission = when (permission) {
+                NotificationPermissionStatus.GRANTED -> NotificationPermissionState.GRANTED
+                NotificationPermissionStatus.DENIED -> NotificationPermissionState.DENIED
+                NotificationPermissionStatus.NOT_REQUIRED -> NotificationPermissionState.NOT_REQUIRED
+            },
+            channels = channels,
+        )
+    }
 
     fun about(piVersion: String?): AboutUiState = AboutUiState(
         piVersion = piVersion,
@@ -142,6 +164,7 @@ class SettingsProjection(
     autoLockMinutes: Int?,
     relayUrl: () -> String?,
     piVersion: String?,
+    providers: () -> List<UnifiedPushProvider>,
     scope: CoroutineScope,
 ) {
     val state: StateFlow<SettingsUiState> = combine(
@@ -153,7 +176,12 @@ class SettingsProjection(
         SettingsUiState(
             connection = SettingsMappers.connection(app.trust, app.connection, relayUrl()),
             security = SettingsMappers.security(app.trust, app.authentication, autoLockMinutes),
-            notifications = SettingsMappers.notifications(push, permission, channelStates()),
+            notifications = SettingsMappers.notifications(
+                push = push,
+                permission = permission,
+                channels = channelStates(),
+                providers = providers(),
+            ),
             updates = updateAdapter.toUiState(update),
             about = SettingsMappers.about(piVersion),
         )

@@ -171,6 +171,7 @@ class BoundedMacVoiceQueue(
 
     private fun markFailure(code: VoiceFrontendErrorCode) {
         val metrics: VoiceQueueMetrics
+        val completion: CompletableDeferred<Unit>
         synchronized(lock) {
             if (failure != null || canceled) return
             failure = code
@@ -180,11 +181,12 @@ class BoundedMacVoiceQueue(
             bufferedAudioMilliseconds = 0
             workerRunning = false
             worker = null
-            idle.complete(Unit)
+            completion = idle
             metrics = metricsLocked()
         }
         onMetrics(metrics)
         onFailure(code)
+        completion.complete(Unit)
     }
 
     private fun metricsLocked(): VoiceQueueMetrics = VoiceQueueMetrics(

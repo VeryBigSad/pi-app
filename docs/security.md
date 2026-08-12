@@ -128,7 +128,7 @@ Routine reads/builds/tests do not prompt. No “always allow” or generic appro
 - Crash reporting is opt-in and content-redacted; raw Pi/terminal/audio bodies are excluded.
 - Notification payloads contain an opaque random wake ID only. Detailed text is fetched over mTLS and shown only after unlock.
 - URI/file imports use Photo Picker or scoped access, enforce MIME/size, and copy into private bounded storage. Prompt images upload as digest-bound blobs; not-ready/cross-device refs fail, and cancelled/disconnected/expired orphan data is swept.
-- WebView terminal cannot access files/content, remote network, mixed content, popups, arbitrary navigation, downloads, or unrestricted JS bridges. Assets are local with strict CSP; WebView debugging is off in release.
+- WebView terminal cannot access files/content, remote network, mixed content, popups, arbitrary navigation, downloads, or unrestricted JS bridges. Assets, scripts, and external stylesheet sources are local-only. xterm's dynamic textarea/canvas/IME styles require CSP `unsafe-inline` for `style-src-attr` and Chromium-91's `style-src-elem` compatibility path; no untrusted content is inserted as HTML and CSS cannot fetch off-origin resources. WebView debugging is off in release.
 
 ## Self-update threat model
 

@@ -49,6 +49,7 @@
     "approvalDecisionMilliseconds": 120000,
     "approvalHookMilliseconds": 150000,
     "voiceBodyBytes": 65536,
+    "voiceChunkBytes": 384000,
     "voiceTextChars": 16384,
     "maxAgents": 256
   },
@@ -876,6 +877,197 @@
         "offset": "0",
         "dataHex": ""
       },
+      "valid": false
+    }
+  ],
+  "voiceStreamCases": [
+    {
+      "name": "contiguous-two-chunks",
+      "frames": [
+        {
+          "streamId": "550e8400-e29b-41d4-a716-446655440001",
+          "sequence": 0,
+          "offset": "0",
+          "dataHex": "0102"
+        }
+      ],
+      "boundaries": [
+        {
+          "streamId": "550e8400-e29b-41d4-a716-446655440001",
+          "chunkSequence": "0",
+          "final": false
+        }
+      ],
+      "moreFrames": [
+        {
+          "streamId": "550e8400-e29b-41d4-a716-446655440001",
+          "sequence": 1,
+          "offset": "2",
+          "dataHex": "0304"
+        }
+      ],
+      "finalBoundary": {
+        "streamId": "550e8400-e29b-41d4-a716-446655440001",
+        "chunkSequence": "1",
+        "final": true
+      },
+      "valid": true
+    },
+    {
+      "name": "empty-final-marker",
+      "frames": [],
+      "boundaries": [],
+      "moreFrames": [],
+      "finalBoundary": {
+        "streamId": "550e8400-e29b-41d4-a716-446655440001",
+        "chunkSequence": "0",
+        "final": true
+      },
+      "valid": true
+    },
+    {
+      "name": "frame-sequence-gap",
+      "frames": [
+        {
+          "streamId": "550e8400-e29b-41d4-a716-446655440001",
+          "sequence": 1,
+          "offset": "0",
+          "dataHex": "0102"
+        }
+      ],
+      "boundaries": [],
+      "moreFrames": [],
+      "valid": false
+    },
+    {
+      "name": "frame-offset-gap",
+      "frames": [
+        {
+          "streamId": "550e8400-e29b-41d4-a716-446655440001",
+          "sequence": 0,
+          "offset": "2",
+          "dataHex": "0102"
+        }
+      ],
+      "boundaries": [],
+      "moreFrames": [],
+      "valid": false
+    },
+    {
+      "name": "odd-pcm",
+      "frames": [
+        {
+          "streamId": "550e8400-e29b-41d4-a716-446655440001",
+          "sequence": 0,
+          "offset": "0",
+          "dataHex": "01"
+        }
+      ],
+      "boundaries": [],
+      "moreFrames": [],
+      "valid": false
+    },
+    {
+      "name": "chunk-overflow",
+      "frames": [
+        {
+          "streamId": "550e8400-e29b-41d4-a716-446655440001",
+          "sequence": 0,
+          "offset": "0",
+          "dataBytes": 64000
+        },
+        {
+          "streamId": "550e8400-e29b-41d4-a716-446655440001",
+          "sequence": 1,
+          "offset": "64000",
+          "dataBytes": 64000
+        },
+        {
+          "streamId": "550e8400-e29b-41d4-a716-446655440001",
+          "sequence": 2,
+          "offset": "128000",
+          "dataBytes": 64000
+        },
+        {
+          "streamId": "550e8400-e29b-41d4-a716-446655440001",
+          "sequence": 3,
+          "offset": "192000",
+          "dataBytes": 64000
+        },
+        {
+          "streamId": "550e8400-e29b-41d4-a716-446655440001",
+          "sequence": 4,
+          "offset": "256000",
+          "dataBytes": 64000
+        },
+        {
+          "streamId": "550e8400-e29b-41d4-a716-446655440001",
+          "sequence": 5,
+          "offset": "320000",
+          "dataBytes": 64000
+        },
+        {
+          "streamId": "550e8400-e29b-41d4-a716-446655440001",
+          "sequence": 6,
+          "offset": "384000",
+          "dataBytes": 2
+        }
+      ],
+      "boundaries": [],
+      "moreFrames": [],
+      "valid": false
+    },
+    {
+      "name": "noncanonical-chunk-sequence",
+      "frames": [
+        {
+          "streamId": "550e8400-e29b-41d4-a716-446655440001",
+          "sequence": 0,
+          "offset": "0",
+          "dataHex": "0102"
+        }
+      ],
+      "boundaries": [
+        {
+          "streamId": "550e8400-e29b-41d4-a716-446655440001",
+          "chunkSequence": "00",
+          "final": false
+        }
+      ],
+      "moreFrames": [],
+      "valid": false
+    },
+    {
+      "name": "chunk-sequence-gap",
+      "frames": [
+        {
+          "streamId": "550e8400-e29b-41d4-a716-446655440001",
+          "sequence": 0,
+          "offset": "0",
+          "dataHex": "0102"
+        }
+      ],
+      "boundaries": [
+        {
+          "streamId": "550e8400-e29b-41d4-a716-446655440001",
+          "chunkSequence": "1",
+          "final": false
+        }
+      ],
+      "moreFrames": [],
+      "valid": false
+    },
+    {
+      "name": "empty-nonfinal-marker",
+      "frames": [],
+      "boundaries": [
+        {
+          "streamId": "550e8400-e29b-41d4-a716-446655440001",
+          "chunkSequence": "0",
+          "final": false
+        }
+      ],
+      "moreFrames": [],
       "valid": false
     }
   ],
@@ -2147,7 +2339,7 @@
       }
     },
     {
-      "name": "terminal-history-max",
+      "name": "terminal-history-request-uint64-max",
       "schema": "messages",
       "valid": true,
       "value": {
@@ -2160,13 +2352,14 @@
         "replyTo": null,
         "body": {
           "sessionId": "550e8400-e29b-41d4-a716-446655440002",
-          "beforeSequence": "18446744073709551615",
-          "limit": 5000
+          "terminalGeneration": "18446744073709551615",
+          "maxLines": 5000,
+          "maxBytes": 1048576
         }
       }
     },
     {
-      "name": "terminal-history-over-lines",
+      "name": "terminal-history-request-over-lines",
       "schema": "messages",
       "valid": false,
       "value": {
@@ -2179,8 +2372,29 @@
         "replyTo": null,
         "body": {
           "sessionId": "550e8400-e29b-41d4-a716-446655440002",
-          "beforeSequence": "0",
-          "limit": 5001
+          "terminalGeneration": "0",
+          "maxLines": 5001,
+          "maxBytes": 1
+        }
+      }
+    },
+    {
+      "name": "terminal-history-request-over-bytes",
+      "schema": "messages",
+      "valid": false,
+      "value": {
+        "v": {
+          "major": 1,
+          "minor": 0
+        },
+        "type": "terminal.history.request",
+        "messageId": "550e8400-e29b-41d4-a716-446655440018",
+        "replyTo": null,
+        "body": {
+          "sessionId": "550e8400-e29b-41d4-a716-446655440002",
+          "terminalGeneration": "0",
+          "maxLines": 1,
+          "maxBytes": 1048577
         }
       }
     },
@@ -2280,6 +2494,8 @@
         "body": {
           "sessionId": "550e8400-e29b-41d4-a716-446655440002",
           "streamEpoch": "550e8400-e29b-41d4-a716-446655440003",
+          "sequence": "50",
+          "pages": 2,
           "messageCount": "4096",
           "lastAppendId": "4096",
           "leafId": "deadbeef",
@@ -2302,6 +2518,8 @@
         "body": {
           "sessionId": "550e8400-e29b-41d4-a716-446655440002",
           "streamEpoch": "550e8400-e29b-41d4-a716-446655440003",
+          "sequence": "50",
+          "pages": 2,
           "messageCount": "4096",
           "lastAppendId": "4096",
           "leafId": "DEADBEEF",
@@ -2554,7 +2772,19 @@
         "body": {
           "sessionId": "550e8400-e29b-41d4-a716-446655440002",
           "streamEpoch": "550e8400-e29b-41d4-a716-446655440003",
-          "appendId": "42"
+          "sequence": "42",
+          "appendId": "42",
+          "piType": "message_end",
+          "rawJson": "{\"type\":\"message_end\"}",
+          "rawSize": "22",
+          "rawSha256": "32c9648609d7ad35207f706a83984396bfe141a492f7c05c3b8e33c13f5caf56",
+          "projection": {
+            "type": "message_end",
+            "message": {
+              "role": "assistant",
+              "content": []
+            }
+          }
         }
       }
     },
@@ -2573,7 +2803,19 @@
         "body": {
           "sessionId": "550e8400-e29b-41d4-a716-446655440002",
           "streamEpoch": "550e8400-e29b-41d4-a716-446655440003",
-          "appendId": "042"
+          "sequence": "42",
+          "appendId": "042",
+          "piType": "message_end",
+          "rawJson": "{\"type\":\"message_end\"}",
+          "rawSize": "22",
+          "rawSha256": "32c9648609d7ad35207f706a83984396bfe141a492f7c05c3b8e33c13f5caf56",
+          "projection": {
+            "type": "message_end",
+            "message": {
+              "role": "assistant",
+              "content": []
+            }
+          }
         }
       }
     },
@@ -2687,6 +2929,7 @@
         "body": {
           "sessionId": "550e8400-e29b-41d4-a716-446655440002",
           "streamEpoch": "550e8400-e29b-41d4-a716-446655440003",
+          "sequence": "50",
           "messageCount": "4096",
           "lastAppendId": "4096"
         }
@@ -2707,8 +2950,49 @@
         "body": {
           "sessionId": "550e8400-e29b-41d4-a716-446655440002",
           "streamEpoch": "550e8400-e29b-41d4-a716-446655440003",
+          "sequence": "50",
           "messageCount": "4096",
           "lastAppendId": "cafebabe"
+        }
+      }
+    },
+    {
+      "name": "voice-start",
+      "schema": "messages",
+      "valid": true,
+      "value": {
+        "v": {
+          "major": 1,
+          "minor": 0
+        },
+        "type": "voice.start",
+        "messageId": "550e8400-e29b-41d4-a716-446655440051",
+        "replyTo": null,
+        "body": {
+          "streamId": "550e8400-e29b-41d4-a716-446655440002",
+          "sampleRate": 16000,
+          "channels": 1,
+          "sampleFormat": "s16le"
+        }
+      }
+    },
+    {
+      "name": "voice-start-wrong-format",
+      "schema": "messages",
+      "valid": false,
+      "value": {
+        "v": {
+          "major": 1,
+          "minor": 0
+        },
+        "type": "voice.start",
+        "messageId": "550e8400-e29b-41d4-a716-446655440052",
+        "replyTo": null,
+        "body": {
+          "streamId": "550e8400-e29b-41d4-a716-446655440002",
+          "sampleRate": 48000,
+          "channels": 1,
+          "sampleFormat": "s16le"
         }
       }
     },
@@ -2747,6 +3031,26 @@
           "sessionId": "550e8400-e29b-41d4-a716-446655440002",
           "chunkSequence": "01",
           "final": true
+        }
+      }
+    },
+    {
+      "name": "voice-audio-json-pcm",
+      "schema": "messages",
+      "valid": false,
+      "value": {
+        "v": {
+          "major": 1,
+          "minor": 0
+        },
+        "type": "voice.audio",
+        "messageId": "550e8400-e29b-41d4-a716-446655440055",
+        "replyTo": null,
+        "body": {
+          "sessionId": "550e8400-e29b-41d4-a716-446655440002",
+          "chunkSequence": "0",
+          "final": true,
+          "audio": "AQI"
         }
       }
     },
@@ -2828,6 +3132,45 @@
       }
     },
     {
+      "name": "voice-cancel",
+      "schema": "messages",
+      "valid": true,
+      "value": {
+        "v": {
+          "major": 1,
+          "minor": 0
+        },
+        "type": "voice.cancel",
+        "messageId": "550e8400-e29b-41d4-a716-446655440053",
+        "replyTo": null,
+        "body": {
+          "streamId": "550e8400-e29b-41d4-a716-446655440002",
+          "reason": "user"
+        }
+      }
+    },
+    {
+      "name": "voice-error",
+      "schema": "messages",
+      "valid": true,
+      "value": {
+        "v": {
+          "major": 1,
+          "minor": 0
+        },
+        "type": "voice.error",
+        "messageId": "550e8400-e29b-41d4-a716-446655440054",
+        "replyTo": null,
+        "body": {
+          "streamId": "550e8400-e29b-41d4-a716-446655440002",
+          "code": "VOICE_QUOTA",
+          "message": "Voice transcription failed",
+          "detailCode": "VOICE_RPM_LIMIT",
+          "resetAtEpochMilliseconds": "1000"
+        }
+      }
+    },
+    {
       "name": "push-endpoint-without-wake-key",
       "schema": "messages",
       "valid": true,
@@ -2860,16 +3203,16 @@
         "replyTo": null,
         "body": {
           "sessionId": "550e8400-e29b-41d4-a716-446655440002",
-          "entries": [
-            "line one",
-            "line two"
-          ],
-          "truncated": false
+          "terminalGeneration": "18446744073709551615",
+          "capturedAt": "2026-08-09T12:00:00Z",
+          "text": "line one\nline two",
+          "truncatedLines": false,
+          "truncatedBytes": false
         }
       }
     },
     {
-      "name": "terminal-history-response-missing-truncated",
+      "name": "terminal-history-response-missing-truncation",
       "schema": "messages",
       "valid": false,
       "value": {
@@ -2882,7 +3225,9 @@
         "replyTo": null,
         "body": {
           "sessionId": "550e8400-e29b-41d4-a716-446655440002",
-          "entries": []
+          "terminalGeneration": "0",
+          "capturedAt": "2026-08-09T12:00:00Z",
+          "text": ""
         }
       }
     },
@@ -3117,7 +3462,19 @@
       "body": {
         "sessionId": "550e8400-e29b-41d4-a716-446655440002",
         "streamEpoch": "550e8400-e29b-41d4-a716-446655440003",
-        "appendId": "42"
+        "sequence": "42",
+        "appendId": "42",
+        "piType": "message_end",
+        "rawJson": "{\"type\":\"message_end\"}",
+        "rawSize": "22",
+        "rawSha256": "32c9648609d7ad35207f706a83984396bfe141a492f7c05c3b8e33c13f5caf56",
+        "projection": {
+          "type": "message_end",
+          "message": {
+            "role": "assistant",
+            "content": []
+          }
+        }
       },
       "valid": true
     },
@@ -3127,7 +3484,19 @@
       "body": {
         "sessionId": "550e8400-e29b-41d4-a716-446655440002",
         "streamEpoch": "550e8400-e29b-41d4-a716-446655440003",
+        "sequence": "42",
         "appendId": "18446744073709551615",
+        "piType": "message_end",
+        "rawJson": "{\"type\":\"message_end\"}",
+        "rawSize": "22",
+        "rawSha256": "32c9648609d7ad35207f706a83984396bfe141a492f7c05c3b8e33c13f5caf56",
+        "projection": {
+          "type": "message_end",
+          "message": {
+            "role": "assistant",
+            "content": []
+          }
+        },
         "leafId": "deadbeef"
       },
       "valid": true
@@ -3138,7 +3507,19 @@
       "body": {
         "sessionId": "550e8400-e29b-41d4-a716-446655440002",
         "streamEpoch": "550e8400-e29b-41d4-a716-446655440003",
-        "appendId": "042"
+        "sequence": "42",
+        "appendId": "042",
+        "piType": "message_end",
+        "rawJson": "{\"type\":\"message_end\"}",
+        "rawSize": "22",
+        "rawSha256": "32c9648609d7ad35207f706a83984396bfe141a492f7c05c3b8e33c13f5caf56",
+        "projection": {
+          "type": "message_end",
+          "message": {
+            "role": "assistant",
+            "content": []
+          }
+        }
       },
       "valid": false
     },
@@ -3148,7 +3529,90 @@
       "body": {
         "sessionId": "550e8400-e29b-41d4-a716-446655440002",
         "streamEpoch": "550e8400-e29b-41d4-a716-446655440003",
-        "appendId": "18446744073709551616"
+        "sequence": "42",
+        "appendId": "18446744073709551616",
+        "piType": "message_end",
+        "rawJson": "{\"type\":\"message_end\"}",
+        "rawSize": "22",
+        "rawSha256": "32c9648609d7ad35207f706a83984396bfe141a492f7c05c3b8e33c13f5caf56",
+        "projection": {
+          "type": "message_end",
+          "message": {
+            "role": "assistant",
+            "content": []
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "command-state-armed",
+      "type": "command.state",
+      "body": {
+        "commandId": "550e8400-e29b-41d4-a716-446655440009",
+        "state": "ARMED",
+        "dormant": false
+      },
+      "valid": true
+    },
+    {
+      "name": "command-state-dormant-received",
+      "type": "command.state",
+      "body": {
+        "commandId": "550e8400-e29b-41d4-a716-446655440009",
+        "state": "RECEIVED",
+        "dormant": true
+      },
+      "valid": true
+    },
+    {
+      "name": "command-state-dormant-armed",
+      "type": "command.state",
+      "body": {
+        "commandId": "550e8400-e29b-41d4-a716-446655440009",
+        "state": "ARMED",
+        "dormant": true
+      },
+      "valid": false
+    },
+    {
+      "name": "command-result-acked",
+      "type": "command.result",
+      "body": {
+        "commandId": "550e8400-e29b-41d4-a716-446655440009",
+        "state": "ACKED",
+        "result": {
+          "success": true
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "command-result-rejected",
+      "type": "command.result",
+      "body": {
+        "commandId": "550e8400-e29b-41d4-a716-446655440009",
+        "state": "REJECTED",
+        "errorCode": "PI_RPC_REJECTED"
+      },
+      "valid": true
+    },
+    {
+      "name": "command-result-nonterminal",
+      "type": "command.result",
+      "body": {
+        "commandId": "550e8400-e29b-41d4-a716-446655440009",
+        "state": "ARMED"
+      },
+      "valid": false
+    },
+    {
+      "name": "command-result-bad-error",
+      "type": "command.result",
+      "body": {
+        "commandId": "550e8400-e29b-41d4-a716-446655440009",
+        "state": "REJECTED",
+        "errorCode": "bad-code"
       },
       "valid": false
     },
@@ -3220,6 +3684,132 @@
       "valid": false
     },
     {
+      "name": "session-catalog-empty-provider",
+      "type": "session.catalog",
+      "body": {
+        "sessions": [
+          {
+            "sessionId": "550e8400-e29b-41d4-a716-446655440002",
+            "provider": "",
+            "model": "gpt-5",
+            "thinkingLevel": "high",
+            "repo": "/work/pi-app",
+            "worktree": null,
+            "cwd": "/work/pi-app",
+            "parentId": null,
+            "createdAt": "2026-08-09T10:00:00Z",
+            "updatedAt": "2026-08-09T11:00:00Z"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "session-catalog-model-over-bound",
+      "type": "session.catalog",
+      "body": {
+        "sessions": [
+          {
+            "sessionId": "550e8400-e29b-41d4-a716-446655440002",
+            "provider": "openai",
+            "model": "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm",
+            "thinkingLevel": "high",
+            "repo": "/work/pi-app",
+            "worktree": null,
+            "cwd": "/work/pi-app",
+            "parentId": null,
+            "createdAt": "2026-08-09T10:00:00Z",
+            "updatedAt": "2026-08-09T11:00:00Z"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "session-catalog-thinking-over-bound",
+      "type": "session.catalog",
+      "body": {
+        "sessions": [
+          {
+            "sessionId": "550e8400-e29b-41d4-a716-446655440002",
+            "provider": "openai",
+            "model": "gpt-5",
+            "thinkingLevel": "ttttttttttttttttttttttttttttttttt",
+            "repo": "/work/pi-app",
+            "worktree": null,
+            "cwd": "/work/pi-app",
+            "parentId": null,
+            "createdAt": "2026-08-09T10:00:00Z",
+            "updatedAt": "2026-08-09T11:00:00Z"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "session-catalog-empty-repo",
+      "type": "session.catalog",
+      "body": {
+        "sessions": [
+          {
+            "sessionId": "550e8400-e29b-41d4-a716-446655440002",
+            "provider": "openai",
+            "model": "gpt-5",
+            "thinkingLevel": "high",
+            "repo": "",
+            "worktree": null,
+            "cwd": "/work/pi-app",
+            "parentId": null,
+            "createdAt": "2026-08-09T10:00:00Z",
+            "updatedAt": "2026-08-09T11:00:00Z"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "session-catalog-empty-worktree",
+      "type": "session.catalog",
+      "body": {
+        "sessions": [
+          {
+            "sessionId": "550e8400-e29b-41d4-a716-446655440002",
+            "provider": "openai",
+            "model": "gpt-5",
+            "thinkingLevel": "high",
+            "repo": "/work/pi-app",
+            "worktree": "",
+            "cwd": "/work/pi-app",
+            "parentId": null,
+            "createdAt": "2026-08-09T10:00:00Z",
+            "updatedAt": "2026-08-09T11:00:00Z"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "session-catalog-cwd-over-bound",
+      "type": "session.catalog",
+      "body": {
+        "sessions": [
+          {
+            "sessionId": "550e8400-e29b-41d4-a716-446655440002",
+            "provider": "openai",
+            "model": "gpt-5",
+            "thinkingLevel": "high",
+            "repo": "/work/pi-app",
+            "worktree": null,
+            "cwd": "ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "parentId": null,
+            "createdAt": "2026-08-09T10:00:00Z",
+            "updatedAt": "2026-08-09T11:00:00Z"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
       "name": "session-catalog-bad-parent",
       "type": "session.catalog",
       "body": {
@@ -3241,11 +3831,54 @@
       "valid": false
     },
     {
+      "name": "session-catalog-bad-created-at",
+      "type": "session.catalog",
+      "body": {
+        "sessions": [
+          {
+            "sessionId": "550e8400-e29b-41d4-a716-446655440002",
+            "provider": "openai",
+            "model": "gpt-5",
+            "thinkingLevel": "high",
+            "repo": "/work/pi-app",
+            "worktree": null,
+            "cwd": "/work/pi-app",
+            "parentId": null,
+            "createdAt": "not-a-date",
+            "updatedAt": "2026-08-09T11:00:00Z"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "session-catalog-bad-updated-at",
+      "type": "session.catalog",
+      "body": {
+        "sessions": [
+          {
+            "sessionId": "550e8400-e29b-41d4-a716-446655440002",
+            "provider": "openai",
+            "model": "gpt-5",
+            "thinkingLevel": "high",
+            "repo": "/work/pi-app",
+            "worktree": null,
+            "cwd": "/work/pi-app",
+            "parentId": null,
+            "createdAt": "2026-08-09T10:00:00Z",
+            "updatedAt": "not-a-date"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
       "name": "snapshot-begin",
       "type": "snapshot.begin",
       "body": {
         "sessionId": "550e8400-e29b-41d4-a716-446655440002",
         "streamEpoch": "550e8400-e29b-41d4-a716-446655440003",
+        "sequence": "50",
         "messageCount": "4096",
         "lastAppendId": "4096"
       },
@@ -3257,6 +3890,7 @@
       "body": {
         "sessionId": "550e8400-e29b-41d4-a716-446655440002",
         "streamEpoch": "550e8400-e29b-41d4-a716-446655440003",
+        "sequence": "0",
         "messageCount": "0",
         "lastAppendId": null
       },
@@ -3268,6 +3902,7 @@
       "body": {
         "sessionId": "550e8400-e29b-41d4-a716-446655440002",
         "streamEpoch": "550e8400-e29b-41d4-a716-446655440003",
+        "sequence": "50",
         "messageCount": "4096",
         "lastAppendId": "cafebabe"
       },
@@ -3279,6 +3914,8 @@
       "body": {
         "sessionId": "550e8400-e29b-41d4-a716-446655440002",
         "streamEpoch": "550e8400-e29b-41d4-a716-446655440003",
+        "sequence": "50",
+        "pages": 2,
         "messageCount": "4096",
         "lastAppendId": "4096",
         "leafId": "deadbeef",
@@ -3292,6 +3929,8 @@
       "body": {
         "sessionId": "550e8400-e29b-41d4-a716-446655440002",
         "streamEpoch": "550e8400-e29b-41d4-a716-446655440003",
+        "sequence": "0",
+        "pages": 0,
         "messageCount": "0",
         "lastAppendId": null,
         "leafId": null,
@@ -3305,10 +3944,34 @@
       "body": {
         "sessionId": "550e8400-e29b-41d4-a716-446655440002",
         "streamEpoch": "550e8400-e29b-41d4-a716-446655440003",
+        "sequence": "50",
+        "pages": 2,
         "messageCount": "4096",
         "lastAppendId": "4096",
         "leafId": "deadbeef",
         "validated": false
+      },
+      "valid": false
+    },
+    {
+      "name": "voice-start",
+      "type": "voice.start",
+      "body": {
+        "streamId": "550e8400-e29b-41d4-a716-446655440002",
+        "sampleRate": 16000,
+        "channels": 1,
+        "sampleFormat": "s16le"
+      },
+      "valid": true
+    },
+    {
+      "name": "voice-start-wrong-rate",
+      "type": "voice.start",
+      "body": {
+        "streamId": "550e8400-e29b-41d4-a716-446655440002",
+        "sampleRate": 48000,
+        "channels": 1,
+        "sampleFormat": "s16le"
       },
       "valid": false
     },
@@ -3348,6 +4011,17 @@
         "sessionId": "550e8400-e29b-41d4-a716-446655440002",
         "chunkSequence": "01",
         "final": false
+      },
+      "valid": false
+    },
+    {
+      "name": "voice-audio-json-pcm",
+      "type": "voice.audio",
+      "body": {
+        "sessionId": "550e8400-e29b-41d4-a716-446655440002",
+        "chunkSequence": "0",
+        "final": true,
+        "audio": "AQI"
       },
       "valid": false
     },
@@ -3404,6 +4078,46 @@
       "valid": false
     },
     {
+      "name": "voice-cancel",
+      "type": "voice.cancel",
+      "body": {
+        "streamId": "550e8400-e29b-41d4-a716-446655440002",
+        "reason": "user"
+      },
+      "valid": true
+    },
+    {
+      "name": "voice-cancel-missing-reason",
+      "type": "voice.cancel",
+      "body": {
+        "streamId": "550e8400-e29b-41d4-a716-446655440002"
+      },
+      "valid": false
+    },
+    {
+      "name": "voice-error",
+      "type": "voice.error",
+      "body": {
+        "streamId": "550e8400-e29b-41d4-a716-446655440002",
+        "code": "VOICE_QUOTA",
+        "message": "Voice transcription failed",
+        "detailCode": "VOICE_RPM_LIMIT",
+        "resetAtEpochMilliseconds": "1000"
+      },
+      "valid": true
+    },
+    {
+      "name": "voice-error-numeric-reset",
+      "type": "voice.error",
+      "body": {
+        "streamId": "550e8400-e29b-41d4-a716-446655440002",
+        "code": "VOICE_QUOTA",
+        "message": "Voice transcription failed",
+        "resetAtEpochMilliseconds": 1000
+      },
+      "valid": false
+    },
+    {
       "name": "push-endpoint-without-wake-key",
       "type": "push.endpoint",
       "body": {
@@ -3440,38 +4154,53 @@
       "type": "terminal.history.request",
       "body": {
         "sessionId": "550e8400-e29b-41d4-a716-446655440002",
-        "beforeSequence": "5000",
-        "limit": 500
+        "terminalGeneration": "5000",
+        "maxLines": 500,
+        "maxBytes": 1024
       },
       "valid": true
     },
     {
-      "name": "terminal-history-request-latest",
+      "name": "terminal-history-request-uint64-max",
       "type": "terminal.history.request",
       "body": {
         "sessionId": "550e8400-e29b-41d4-a716-446655440002",
-        "beforeSequence": null,
-        "limit": 1
+        "terminalGeneration": "18446744073709551615",
+        "maxLines": 5000,
+        "maxBytes": 1048576
       },
       "valid": true
     },
     {
-      "name": "terminal-history-request-over-limit",
+      "name": "terminal-history-request-over-lines",
       "type": "terminal.history.request",
       "body": {
         "sessionId": "550e8400-e29b-41d4-a716-446655440002",
-        "beforeSequence": "5000",
-        "limit": 5001
+        "terminalGeneration": "5000",
+        "maxLines": 5001,
+        "maxBytes": 1
       },
       "valid": false
     },
     {
-      "name": "terminal-history-request-bad-sequence",
+      "name": "terminal-history-request-over-bytes",
       "type": "terminal.history.request",
       "body": {
         "sessionId": "550e8400-e29b-41d4-a716-446655440002",
-        "beforeSequence": "-1",
-        "limit": 500
+        "terminalGeneration": "5000",
+        "maxLines": 1,
+        "maxBytes": 1048577
+      },
+      "valid": false
+    },
+    {
+      "name": "terminal-history-request-noncanonical-generation",
+      "type": "terminal.history.request",
+      "body": {
+        "sessionId": "550e8400-e29b-41d4-a716-446655440002",
+        "terminalGeneration": "01",
+        "maxLines": 1,
+        "maxBytes": 1
       },
       "valid": false
     },
@@ -3480,11 +4209,11 @@
       "type": "terminal.history.response",
       "body": {
         "sessionId": "550e8400-e29b-41d4-a716-446655440002",
-        "entries": [
-          "line one",
-          "line two"
-        ],
-        "truncated": false
+        "terminalGeneration": "5000",
+        "capturedAt": "2026-08-09T12:00:00Z",
+        "text": "line one\nline two",
+        "truncatedLines": false,
+        "truncatedBytes": false
       },
       "valid": true
     },
@@ -3493,17 +4222,22 @@
       "type": "terminal.history.response",
       "body": {
         "sessionId": "550e8400-e29b-41d4-a716-446655440002",
-        "entries": [],
-        "truncated": true
+        "terminalGeneration": "0",
+        "capturedAt": "2026-08-09T12:00:00Z",
+        "text": "",
+        "truncatedLines": true,
+        "truncatedBytes": true
       },
       "valid": true
     },
     {
-      "name": "terminal-history-response-missing-truncated",
+      "name": "terminal-history-response-missing-truncation",
       "type": "terminal.history.response",
       "body": {
         "sessionId": "550e8400-e29b-41d4-a716-446655440002",
-        "entries": []
+        "terminalGeneration": "0",
+        "capturedAt": "2026-08-09T12:00:00Z",
+        "text": ""
       },
       "valid": false
     },

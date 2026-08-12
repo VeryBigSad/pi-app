@@ -1,5 +1,4 @@
-import { assertJsonValue, isJsonObject, type JsonObject } from "@pimobile/protocol";
-import { logError } from "../daemon/log.js";
+import { assertJsonValue, assertWireMessage, isJsonObject, type JsonObject } from "@pimobile/protocol";
 import { captureCanonicalSnapshot } from "../sync/canonical-snapshot.js";
 import type { GatewaySyncPlan, ReplaySyncPlan, SnapshotSyncPlan, SyncRuntime } from "./types.js";
 
@@ -26,51 +25,64 @@ interface PendingCommit {
   readonly afterCommit: readonly JsonObject[];
 }
 
+export type SyncRefresh = () => Promise<void>;
+
 export class CanonicalSyncSequencer {
   private pending: PendingCommit | undefined;
   private queue: JsonObject[] = [];
-  /** Set when a resume carried no per-session work: catalogs + sync.complete were sent, no ack fence. */
+  private completeReplyTo: string | undefined;
+  /** Set when start() drained every no-ack plan and sent sync.complete without a pending fence. */
   private completedEmpty = false;
 
   constructor(private readonly runtime: SyncRuntime, private readonly send: SyncSend) {}
 
-  /** True when start() completed an empty resume without any pending commit. */
+  /** True when start() completed without leaving an acknowledgment fence. */
   get completedWithoutWork(): boolean {
     return this.completedEmpty;
   }
 
-  async start(resume: JsonObject, replyTo: string, signal: AbortSignal): Promise<void> {
+  async start(resume: JsonObject, replyTo: string, signal: AbortSignal, refresh?: SyncRefresh): Promise<void> {
     if (this.pending !== undefined) throw new SyncSequenceError("Synchronization is already active");
+    const cursors = validateResume(resume);
     this.completedEmpty = false;
-    this.queue = validateResume(resume);
-    // Sessions the device does not know yet (fresh device or host-side new sessions)
-    // must join the queue as full snapshots; known cursors resume incrementally.
-    const known = new Set(
-      this.queue.map((cursor) => (typeof cursor["sessionId"] === "string" ? cursor["sessionId"] : undefined)),
-    );
-    const all = (await this.runtime.listAll?.(signal)) ?? [];
-    for (const entry of all) {
-      const sessionId = entry["sessionId"];
-      if (typeof sessionId === "string" && !known.has(sessionId)) this.queue.push(entry);
-    }
-    if (this.queue.length === 0) {
-      // No sessions exist at all: publish the empty catalogs and complete the fence.
-      await this.send("session.catalog", { sessions: [] }, replyTo);
-      await this.send("agents.catalog", { sessions: [] }, replyTo);
-      await this.send("sync.complete", {}, replyTo);
-      this.completedEmpty = true;
-      return;
-    }
+    this.completeReplyTo = replyTo;
+    this.queue = cursors;
     try {
-      await this.startNext(replyTo, signal);
+      const inventory = this.runtime.inventory === undefined
+        ? {
+            catalog: await this.runtime.catalog(signal),
+            resumes: (await this.runtime.listAll?.(signal)) ?? [],
+          }
+        : await this.runtime.inventory(signal);
+      if (this.runtime.inventory !== undefined) validateInventory(inventory.catalog, inventory.resumes);
+      const known = new Set(
+        this.queue.map((cursor) => (typeof cursor["sessionId"] === "string" ? cursor["sessionId"] : undefined)),
+      );
+      for (const entry of inventory.resumes) {
+        const sessionId = entry["sessionId"];
+        if (typeof sessionId === "string" && !known.has(sessionId)) this.queue.push(entry);
+      }
+
+      const catalogBody: JsonObject = {
+        sessions: inventory.catalog.map((entry) => checkedObject(entry, "session catalog entry")),
+      };
+      assertWireMessage("session.catalog", catalogBody);
+      await this.send("session.catalog", catalogBody, replyTo);
+
+      if (this.queue.length === 0) {
+        await this.send("agents.catalog", { sessions: [] }, replyTo);
+      }
+      await this.advance(replyTo, signal, refresh);
     } catch (error) {
+      this.pending = undefined;
       this.queue = [];
+      this.completeReplyTo = undefined;
       throw error;
     }
   }
 
   /** Returns true once every cursor from sync.resume has committed; false while more plans follow. */
-  async acknowledge(body: JsonObject, signal: AbortSignal): Promise<boolean> {
+  async acknowledge(body: JsonObject, signal: AbortSignal, refresh?: SyncRefresh): Promise<boolean> {
     const pending = this.pending;
     if (pending === undefined) throw new SyncSequenceError("No synchronization commit is pending");
     const sequence = parseUint64(body["sequence"], "event.ack sequence");
@@ -82,46 +94,50 @@ export class CanonicalSyncSequencer {
     await this.runtime.committed(pending.plan, sequence, signal);
     for (const event of pending.afterCommit) await this.send("event.batch", { events: [event] });
     this.pending = undefined;
-    if (this.queue.length > 0) {
-      await this.startNext(null, signal);
-      return false;
+    try {
+      return await this.advance(null, signal, refresh);
+    } catch (error) {
+      this.cancel();
+      throw error;
     }
-    return true;
   }
 
   cancel(): void {
     this.pending = undefined;
     this.queue = [];
+    this.completeReplyTo = undefined;
+    this.completedEmpty = false;
   }
 
-  private async startNext(replyTo: string | null, signal: AbortSignal): Promise<void> {
-    // A session whose snapshot/replay plan fails is skipped (the device keeps its
-    // stale cursor and re-snapshots on the next resume) instead of aborting sync
-    // for every remaining session.
-    let lastError: unknown;
-    for (let skipped = 0; this.queue.length > 0; skipped += 1) {
-      const cursor = this.queue.shift();
-      if (cursor === undefined) break;
-      try {
-        const plan = await this.runtime.prepare(cursor, signal);
-        validatePlan(plan, cursor);
-        if (plan.kind === "replay") {
-          await this.publishReplay(plan, replyTo);
-          this.pending = { plan, expectedSequence: plan.throughSequence, afterCommit: [] };
-          return;
-        }
-        const published = await this.publishSnapshot(plan, replyTo);
-        this.pending = { plan, expectedSequence: published.sequence, afterCommit: published.postFenceEvents };
-        return;
-      } catch (error) {
-        signal.throwIfAborted();
-        lastError = error;
-        logError("sync", `session plan failed (skipped, ${String(skipped)} so far)`, error);
-      }
+  private async advance(replyTo: string | null, signal: AbortSignal, refresh?: SyncRefresh): Promise<boolean> {
+    while (this.queue.length > 0) {
+      if (await this.startNext(replyTo, signal)) return false;
+      replyTo = null;
     }
-    if (lastError instanceof Error) throw lastError;
-    if (lastError !== undefined) throw new SyncSequenceError("Every session plan failed");
-    throw new SyncSequenceError("Synchronization cursor queue is empty");
+    await refresh?.();
+    await this.send("sync.complete", {}, this.completeReplyTo);
+    this.completeReplyTo = undefined;
+    this.completedEmpty = true;
+    return true;
+  }
+
+  private async startNext(replyTo: string | null, signal: AbortSignal): Promise<boolean> {
+    const cursor = this.queue.shift();
+    if (cursor === undefined) throw new SyncSequenceError("Synchronization cursor queue is empty");
+    const plan = await this.runtime.prepare(cursor, signal);
+    validatePlan(plan, cursor);
+    if (plan.kind === "replay") {
+      await this.publishReplay(plan, replyTo);
+      if (plan.events.length === 0 && plan.fromSequence === plan.throughSequence) {
+        await this.runtime.committed(plan, plan.throughSequence, signal);
+        return false;
+      }
+      this.pending = { plan, expectedSequence: plan.throughSequence, afterCommit: [] };
+      return true;
+    }
+    const published = await this.publishSnapshot(plan, replyTo);
+    this.pending = { plan, expectedSequence: published.sequence, afterCommit: published.postFenceEvents };
+    return true;
   }
 
   private async publishReplay(plan: ReplaySyncPlan, replyTo: string | null): Promise<void> {
@@ -148,9 +164,6 @@ export class CanonicalSyncSequencer {
       streamEpoch: plan.streamEpoch,
       reason: "canonical_snapshot",
     }, replyTo);
-    if (plan.catalog !== undefined) {
-      await this.send("session.catalog", checkedObject(plan.catalog, "session catalog"));
-    }
     if (plan.agentsCatalog !== undefined) {
       await this.send("agents.catalog", { sessions: [checkedObject(plan.agentsCatalog, "agents catalog")] });
     }
@@ -158,7 +171,7 @@ export class CanonicalSyncSequencer {
       sessionId: plan.sessionId,
       streamEpoch: plan.streamEpoch,
       sequence: sequence.toString(),
-      messageCount: entries.length,
+      messageCount: entries.length.toString(),
       lastAppendId,
     });
     let page = 0;
@@ -188,10 +201,25 @@ export class CanonicalSyncSequencer {
       sequence: sequence.toString(),
       leafId: snapshot.leafId,
       pages: page,
-      messageCount: entries.length,
+      messageCount: entries.length.toString(),
       lastAppendId,
+      validated: true,
     });
     return { sequence, postFenceEvents };
+  }
+}
+
+function validateInventory(catalog: readonly JsonObject[], resumes: readonly JsonObject[]): void {
+  const catalogIds = catalog.map((entry) => entry["sessionId"]);
+  const resumeIds = resumes.map((entry) => entry["sessionId"]);
+  if (catalogIds.some((id) => typeof id !== "string") || resumeIds.some((id) => typeof id !== "string")) {
+    throw new SyncSequenceError("Synchronization inventory identity is invalid");
+  }
+  if (new Set(catalogIds).size !== catalogIds.length || new Set(resumeIds).size !== resumeIds.length) {
+    throw new SyncSequenceError("Synchronization inventory contains duplicate sessions");
+  }
+  if (catalogIds.length !== resumeIds.length || catalogIds.some((id) => !resumeIds.includes(id))) {
+    throw new SyncSequenceError("Synchronization catalog and queue inventory differ");
   }
 }
 

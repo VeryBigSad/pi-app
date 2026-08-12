@@ -24,7 +24,7 @@ Verified on 2026-08-09:
 - Android SDK is installed: platforms 28/29/34/36, build-tools 36.0.0, emulator 37.1.11, platform-tools 37.0.1.
 - Supported Google APIs AVDs: `PiApp_API_29`, `domonap` (API 34), `PiApp_API_36`; no-Google UI `PiApp_API_34_AOSP_UI` uses the default image and headless `PiApp_API_34_AOSP` uses AOSP ATD; `PiApp_API_28` remains unsupported negative-only.
 - `~/.groq_key` exists, 57 bytes, mode `0600`.
-- Go 1.26.2 and Terraform 1.5.7 are installed.
+- Go 1.26.5 and Terraform 1.5.7 are installed.
 - No project YC resource, Firebase credential, off-machine signing-key backup, or physical-device evidence exists. Public DAL and dedicated local signing identity now exist and match a signed APK.
 
 Do not repeat stale claims that Android SDK/AVDs are absent or that the Groq key is world-readable.
@@ -112,7 +112,7 @@ Parallel lanes after a short schema kickoff:
 ### 0D Build/integration owner
 
 - Scaffold modules and ownership boundaries.
-- Freeze ADR-0019: Gradle 8.13/checksum, AGP 8.13.2, Kotlin/compiler 2.4.10, KSP 2.3.11, Compose BOM 2026.06.01, JDK21/JVM17, SDK 36/36/29, Node22.23.2/npm10.9.8/TS6.0.3, Go toolchain1.26.2; add catalog, verification, and locks.
+- Freeze ADR-0019: Gradle 8.13/checksum, AGP 8.13.2, Kotlin/compiler 2.4.10, KSP 2.3.11, Compose BOM 2026.06.01, JDK21/JVM17, SDK 36/36/29, Node22.23.2/npm10.9.8/TS6.0.3, Go toolchain1.26.5; add catalog, verification, and locks.
 - Fix `minSdk 29` (platform TLS 1.3; API 28 unsupported), build-tools 36.0.0, application ID, and exact xterm/node-pty integrity/packed hashes/locks. Reproducibly bundle xterm for Chromium 91 with the narrow `structuredClone` shim; run a minimal API 29 WebView boot/render/Unicode/input canary before terminal feature work.
 - Add dependency locks, secret scan, SBOM/license jobs, and sanitized fixture policy.
 - Wire `PiApp_API_29`, `domonap`, `PiApp_API_36`, no-Google UI `PiApp_API_34_AOSP_UI`, and headless `PiApp_API_34_AOSP` into distinct lanes; run `PiApp_API_28` only as an unsupported-install negative. AOSP lanes use debug-only fake auth; production no-Google auth requires Android 14+ and a third-party provider.

@@ -2,7 +2,7 @@ module github.com/VeryBigSad/pi-app/relay
 
 go 1.26.0
 
-toolchain go1.26.2
+toolchain go1.26.5
 
 require (
 	github.com/coder/websocket v1.8.15

@@ -107,7 +107,11 @@ class DraftTrustSurvivalTest {
         context,
         PiMobileDatabase::class.java,
         DATABASE_NAME,
-    ).addMigrations(StorageMigrations.MIGRATION_1_2, StorageMigrations.MIGRATION_2_3).build()
+    ).addMigrations(
+        StorageMigrations.MIGRATION_1_2,
+        StorageMigrations.MIGRATION_2_3,
+        StorageMigrations.MIGRATION_3_4,
+    ).build()
 
     private companion object {
         const val DATABASE_NAME = "draft-trust-survival-test.db"

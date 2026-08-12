@@ -177,7 +177,11 @@ object EncryptedCache {
             database = Room.databaseBuilder(context, PiMobileDatabase::class.java, DATABASE_NAME)
                 .openHelperFactory(factory)
                 .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
-                .addMigrations(StorageMigrations.MIGRATION_1_2, StorageMigrations.MIGRATION_2_3)
+                .addMigrations(
+                    StorageMigrations.MIGRATION_1_2,
+                    StorageMigrations.MIGRATION_2_3,
+                    StorageMigrations.MIGRATION_3_4,
+                )
                 .enableMultiInstanceInvalidation()
                 .build()
             val sqlite = database.openHelper.writableDatabase

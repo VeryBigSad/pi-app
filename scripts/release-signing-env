@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
-path="$HOME/Library/Application Support/PiMobile/signing/release.jks"
-password=$(security find-generic-password -a "$USER" -s io.github.verybigsad.pimobile.signing -w)
-printf 'export PI_MOBILE_KEYSTORE_PATH=%q\n' "$path"
-printf 'export PI_MOBILE_KEYSTORE_PASSWORD=%q\n' "$password"
-printf 'export PI_MOBILE_KEY_PASSWORD=%q\n' "$password"
+if [[ "$#" -eq 0 ]]; then
+  echo "usage: scripts/release-signing-env <command> [args...]" >&2
+  exit 64
+fi
+_pi_mobile_signing_path="$HOME/Library/Application Support/PiMobile/signing/release.jks"
+_pi_mobile_signing_password=$(security find-generic-password -a "$USER" -s io.github.verybigsad.pimobile.signing -w)
+export PI_MOBILE_KEYSTORE_PATH="$_pi_mobile_signing_path"
+export PI_MOBILE_KEYSTORE_PASSWORD="$_pi_mobile_signing_password"
+export PI_MOBILE_KEY_PASSWORD="$_pi_mobile_signing_password"
+export PI_MOBILE_KEY_ALIAS="${PI_MOBILE_KEY_ALIAS:-pimobile-release}"
+unset _pi_mobile_signing_path _pi_mobile_signing_password
+exec "$@"

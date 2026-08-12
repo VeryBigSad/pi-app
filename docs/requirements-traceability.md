@@ -11,6 +11,7 @@ Status vocabulary, used strictly:
 - **emulator-only** — passes on an emulator; explicitly weaker than physical evidence and never a substitute for a physical gate.
 - **physical-gate-pending** — requires a physical device, external account state, or live ceremony that does not exist here. No emulator substitute satisfies it.
 - **verified-live** — proven end-to-end 2026-08-12 against the real deployment: YC folder `pimobile`, VM 158.160.210.102 (`standard-v4a`, private YC CR + VM SA, sslip.io ACME TLS 1.3, hardened cloud-init, ntfy deny-all with `up*`-scoped ACL); client on API 29 emulator over the relay rendezvous.
+- **verified-host-live** — the Mac host exercised a real external provider, but no Android client, phone microphone, relay, or phone-to-Mac E2E participated.
 - **not-implemented** — no code, or code without meaningful test coverage.
 
 General evidence anchors, not repeated per row:
@@ -92,17 +93,17 @@ Honest remaining gates: multi-session sync completeness (session list may show a
 | R8 dedupe / catch-up / no-distributor path | `WakeReceiptStoreTest.kt`, `WakeReconnectWorkerTest.kt` (instrumented), `UnifiedPushRuntimeTest.kt` | verified-instrumentation (emulator-only) |
 | R8 Doze (emulator simulation / physical) | adb Doze suite **not-implemented**; physical soak **physical-gate-pending** | not-implemented / physical-gate-pending |
 | R9 key containment | `mac/host/test/voice.test.ts`, `voice-gateway-runtime.test.ts`; `~/.groq_key` mode `0600` verified | verified-unit |
-| R9 VAD boundaries / ordering / merge | `mac/host/test/voice.test.ts`, `android/core/voice/src/test/.../VadVoiceChunkerTest.kt`, `VoiceBoundaryTest.kt` | verified-unit |
+| R9 Android VAD boundaries / host ordering and seam merge | `android/core/voice/src/test/.../VadVoiceChunkerTest.kt`, `VoiceBoundaryTest.kt`; `mac/host/test/voice-component-e2e.test.ts` (serialized cumulative output, normalized seam cases) | verified-unit |
 | R9 draft isolation / no auto-send | `android/core/voice/src/test/.../VoiceTranscriptTest.kt`, `VoiceCaptureControllerTest.kt`; instrumented `VoiceTranscriptGateInstrumentedTest.kt` | verified-instrumentation (emulator-only) |
-| R9 failure/retry matrix, durable rate limits, billing/budgets | `mac/host/test/voice.test.ts` (rate ledger, 429, budgets) | verified-unit |
-| R9 live transcription (opt-in) | not run here | not-implemented (external) |
+| R9 terminal stream failure, durable rollback-safe limits, billing/budgets, bounded Retry-After | `mac/host/test/voice-component-e2e.test.ts` (first/middle failure and late completion); `mac/host/test/voice.test.ts` (persisted effective time, restart, concurrent rollback, windows/budgets, billing, Retry-After) | verified-unit |
+| R9 live Mac-host transcription (opt-in) | `PI_GROQ_LIVE=1 npx vitest run mac/host/test/voice-live.test.ts`: macOS-synthesized 16 kHz mono s16le speech passed directly through `GroqTranscriber`, with keyword/duration/ledger/cleanup assertions; no Android, phone microphone, relay, or phone-to-Mac E2E | verified-host-live |
 | R9 real microphone | `AndroidAudioRecordSourceTest.kt` instrumented on emulator; physical dictation | emulator-only / physical-gate-pending |
 | R10 direct LAN | `mac/host/test/direct-tls.test.ts`, `android/core/network/src/test/.../TlsTransportTest.kt` | verified-unit |
 | R10 one-VM isolation / cost gate / destroy proof | `infra/terraform/` (validation `max_monthly_cost_rub ≤ 1500` in `main.tf`/`variables.tf`), terraform CI job `fmt/validate`; live: applied, VM 158.160.210.102 (`standard-v4a`), hardened cloud-init, ntfy deny-all `up*` ACL | verified-live (apply); destroy proof pending |
 | R10 relay state/privacy | `relay/internal/registry/registry_test.go`, `relay/internal/httpapi/*_test.go` | verified-unit |
 | R10 lock file committed | `.terraform.lock.hcl` handling per `infra/terraform/` + `.gitignore` | verified (static) |
 | R11 suites exist / cross-language parity | `protocol/ts/test/conformance.test.ts` + `android/core/protocol/src/test/.../ConformanceFixtureTest.kt` against shared `protocol/fixtures/pimb-v1.json`; CI runs both | verified-unit |
-| R12 reproducible builds / supply chain | `scripts/terminal-assets.test.mjs` (deterministic bundle), `verify-release-identity.mjs`, `secret-scan.yml`, `relay-image.yml` (digest-pinned cosign-signed image), SBOM job partial | partial verified-unit |
+| R12 reproducible builds / supply chain | `scripts/terminal-assets.test.mjs` (deterministic bundle), `verify-release-identity.mjs`, `scripts/supply-chain.mjs` + tests (deterministic CycloneDX npm/Gradle/Go SBOMs, fail-closed licenses), `ci.yml` (pinned Grype SBOM and rebuilt relay-image SCA), `secret-scan.yml`, `relay-image.yml` (digest-pinned cosign-signed image) | verified-unit + CI gate |
 | R12 assisted self-update | `android/core/update/src/test/**` (7 unit suites), `android/core/update/src/androidTest/**` (instrumented API 29), `scripts/generate-update-metadata.mjs` + test, ADR-0020; live: signed in-place `pimobile-update` rollout exercised repeatedly | verified-live (rollout); feed publication pending `RELEASE_PUBLISH_TOKEN` |
 | R13 docs currency | this document regenerated from the tree 2026-08-12 | continuous |
 
@@ -126,7 +127,7 @@ Honest remaining gates: multi-session sync completeness (session list may show a
 | API 34+ emulator lanes unexecuted | R6/R8 and full terminal matrix | Only API 29 instrumentation has recorded green results | API 34/36 AVDs installed; runs pending |
 | Release-key backup/cross-check incomplete | R6, R12 | Bitwarden is locked and physical release ceremony absent | Local mode-0600 EC keystore + Keychain + published fingerprint; not sufficient backup |
 | Terminal-mode E2E on device | R3 terminal rows | Live on-device terminal run not executed | Emulator terminal canary + runtime instrumentation; API 34 terminal CI lane green |
-| Voice dictation E2E with microphone | R9 | Live microphone dictation run not executed | Emulator `AndroidAudioRecordSourceTest`; host voice unit suites |
+| Voice dictation E2E with microphone | R9 | Live microphone dictation run not executed | Emulator `AndroidAudioRecordSourceTest`; host voice unit suites; host-only live synthesized-speech Groq test — none proves phone E2E |
 | GHCR package public visibility | R12 (optional provenance) | Package visibility change not made; runtime uses YC CR | YC Container Registry pull path proven live |
 | Update feed publication | R12 | Needs `RELEASE_PUBLISH_TOKEN` | Signed in-place `pimobile-update` rollout path proven live without published feed |
 

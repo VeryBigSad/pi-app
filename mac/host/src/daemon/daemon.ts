@@ -311,16 +311,16 @@ export class HostDaemon {
       throw new SecurityError("SECURITY_INVALID_INPUT", "push endpoint message is invalid");
     }
     const wakeKey = body["wakePublicKey"];
-    const existing = store.pushEndpoint();
-    const wakePublicKey = typeof wakeKey === "string"
-      ? wakeKey
-      : existing?.deviceId === deviceId
-        ? existing.wakePublicKey
-        : undefined;
-    if (wakePublicKey === undefined) {
+    if (wakeKey !== undefined && typeof wakeKey !== "string") {
       throw new SecurityError("SECURITY_INVALID_INPUT", "push endpoint message is invalid");
     }
-    await store.setPushEndpoint({ deviceId, endpointId, distributor, endpoint, wakePublicKey });
+    await store.setPushEndpoint({
+      deviceId,
+      endpointId,
+      distributor,
+      endpoint,
+      ...(typeof wakeKey === "string" ? { wakePublicKey: wakeKey } : {}),
+    });
   }
 
   private async revokePushEndpoint(deviceId: string, body: JsonObject): Promise<void> {
@@ -333,7 +333,7 @@ export class HostDaemon {
 
   private onSettlement(notice: SettlementNotice): void {
     void this.push?.publishWake(notice);
-    this.gateway?.publishToReady("session.settlement", {
+    this.gateway?.publishToReady("session.settled", {
       settlementId: notice.settlementId,
       sessionId: notice.sessionId,
       streamEpoch: notice.streamEpoch,
@@ -350,23 +350,23 @@ export class HostDaemon {
   }
 
   private onSessionAppend(append: SessionAppend): void {
-    logWarn("session", `append session=${append.sessionId} seq=${append.sequence}`);
-    const projected = append.projected;
-    this.gateway?.publishToReady("message.append", {
-      appendId: append.appendId,
+    logWarn("session", `canonical session=${append.sessionId} seq=${append.sequence} type=${append.projected.piType}`);
+    const record: JsonObject = {
       sessionId: append.sessionId,
       streamEpoch: append.streamEpoch,
       sequence: append.sequence,
-      ...(projected === undefined
-        ? { record: append.record as never }
-        : {
-            piType: projected.piType,
-            projection: projected.projection.value,
-            rawJson: projected.rawJson,
-            rawSize: projected.rawSize,
-            rawSha256: projected.rawSha256,
-          }),
-    });
+      piType: append.projected.piType,
+      projection: append.projected.projection.value,
+      rawJson: append.projected.rawJson,
+      rawSize: append.projected.rawSize,
+      rawSha256: append.projected.rawSha256,
+    };
+    if (append.projected.piType === "message_end") {
+      if (append.appendId === undefined) throw new Error("CANONICAL_FINAL_APPEND_ID_MISSING");
+      this.gateway?.publishToReady("message.append", { ...record, appendId: append.appendId });
+      return;
+    }
+    this.gateway?.publishToReady("event.batch", { events: [record] });
   }
 
   /**
@@ -475,6 +475,12 @@ export class HostDaemon {
         return this.voice?.status() ?? { queueSize: 0 };
       case "sessions.run":
         return await this.adminRunSessionCommand(params);
+      case "sessions.e2e.create":
+        return await this.adminCreateE2eSession(params);
+      case "sessions.e2e.await_canonical":
+        return await this.adminAwaitE2eCanonical(params);
+      case "sessions.e2e.delete":
+        return await this.adminDeleteE2eSession(params);
       case "stop":
         queueMicrotask(() => void this.stop());
         return { stopping: true };
@@ -584,6 +590,34 @@ export class HostDaemon {
   private async adminRelayRotate(): Promise<unknown> {
     if (this.relayManager === undefined) throw new Error("RELAY_TRANSPORT");
     return await this.relayManager.rotate();
+  }
+
+  private async adminCreateE2eSession(params: Record<string, unknown>): Promise<unknown> {
+    if (Object.keys(params).length !== 0) throw new Error("SECURITY_INVALID_INPUT");
+    const sessions = this.sessions;
+    if (sessions === undefined) throw new Error("RUNTIME_NOT_READY");
+    return await sessions.createE2eSession();
+  }
+
+  private async adminAwaitE2eCanonical(params: Record<string, unknown>): Promise<unknown> {
+    const { sessionId, deleteToken, content } = readE2eSessionParams(params, true);
+    const sessions = this.sessions;
+    if (sessions === undefined) throw new Error("RUNTIME_NOT_READY");
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      if (sessions.e2eCanonicalContains(sessionId, deleteToken, content)) return { visible: true };
+      await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 100));
+    }
+    throw new Error("E2E_SESSION_CANONICAL_TIMEOUT");
+  }
+
+  private async adminDeleteE2eSession(params: Record<string, unknown>): Promise<unknown> {
+    const { sessionId, deleteToken } = readE2eSessionParams(params, false);
+    const sessions = this.sessions;
+    const journal = this.journal;
+    if (sessions === undefined || journal === undefined) throw new Error("RUNTIME_NOT_READY");
+    await sessions.disposeE2eSession(sessionId, deleteToken, async () => await journal.deleteSession(sessionId));
+    return { deleted: sessionId };
   }
 
   /** Local trusted channel: runs one allow-listed semantic command through the real dispatch path. */
@@ -745,6 +779,22 @@ export class HostDaemon {
       },
     };
   }
+}
+
+function readE2eSessionParams(
+  params: Record<string, unknown>,
+  requireContent: boolean,
+): { sessionId: string; deleteToken: string; content: string } {
+  const allowed = requireContent ? new Set(["sessionId", "deleteToken", "content"]) : new Set(["sessionId", "deleteToken"]);
+  if (Object.keys(params).some((key) => !allowed.has(key))) throw new Error("SECURITY_INVALID_INPUT");
+  const sessionId = params["sessionId"];
+  const deleteToken = params["deleteToken"];
+  const content = params["content"];
+  if (typeof sessionId !== "string" || typeof deleteToken !== "string"
+    || (requireContent && (typeof content !== "string" || content.length === 0 || Buffer.byteLength(content, "utf8") > 512))) {
+    throw new Error("SECURITY_INVALID_INPUT");
+  }
+  return { sessionId, deleteToken, content: typeof content === "string" ? content : "" };
 }
 
 function readPasskeySessionTtl(value: unknown): { passkeySessionTtlMs?: number } {

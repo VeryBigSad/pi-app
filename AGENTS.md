@@ -94,7 +94,7 @@ Violating any of these is a release blocker, not a review nit.
 
 **Both/all**
 
-- Follow ADR-0019: Gradle/AGP/Kotlin `8.13/8.13.2/2.4.10`, KSP `2.3.11`, Compose BOM `2026.06.01`, JDK21/JVM17, SDK `36/36/29`, Node `22.23.2`, TypeScript `6.0.3`, Go toolchain `1.26.2`.
+- Follow ADR-0019: Gradle/AGP/Kotlin `8.13/8.13.2/2.4.10`, KSP `2.3.11`, Compose BOM `2026.06.01`, JDK21/JVM17, SDK `36/36/29`, Node `22.23.2`, TypeScript `6.0.3`, Go toolchain `1.26.5`.
 - No code comments except API or function documentation and short notes on non-obvious security invariants.
 - Errors carry a stable code and actionable context, and never carry secrets.
 

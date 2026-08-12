@@ -94,6 +94,27 @@ data class SessionListUiState(
 }
 
 @Immutable
+sealed interface VoicePermissionUiState {
+    data object Denied : VoicePermissionUiState
+
+    data object PermanentlyDenied : VoicePermissionUiState
+}
+
+sealed interface CommandNoticeUiState {
+    data object Sending : CommandNoticeUiState
+
+    data object AwaitingHost : CommandNoticeUiState
+
+    data object Acknowledged : CommandNoticeUiState
+
+    data class Failed(val code: String, val retryable: Boolean) : CommandNoticeUiState {
+        init {
+            require(code.isNotBlank())
+        }
+    }
+}
+
+@Immutable
 data class SessionDetailUiState(
     val session: SessionState,
     val passkeyProvider: PasskeyProviderAvailability,
@@ -107,6 +128,8 @@ data class SessionDetailUiState(
     val expandedContentIds: Set<String> = emptySet(),
     val approvalOffer: ApprovalOfferUiState? = null,
     val approvalNotice: ApprovalNoticeUiState? = null,
+    val commandNotice: CommandNoticeUiState? = null,
+    val voicePermission: VoicePermissionUiState? = null,
 ) {
     init {
         require(nowEpochMillis >= 0)
@@ -228,6 +251,7 @@ sealed interface SessionDetailEvent {
     data object QueueFollowUp : SessionDetailEvent
     data object Attach : SessionDetailEvent
     data object StartVoice : SessionDetailEvent
+    data object OpenVoicePermissionSettings : SessionDetailEvent
     data object InsertTranscription : SessionDetailEvent
     data object DiscardTranscription : SessionDetailEvent
     data object LoadOlder : SessionDetailEvent
@@ -250,13 +274,13 @@ sealed interface TimelineEntry {
     val contentType: String
 
     data class Finalized(val message: FinalizedMessage) : TimelineEntry {
-        override val stableKey: String = "final:${message.id.value}"
-        override val contentType: String = "finalized_message"
+        override val stableKey: String = "message:${message.id.value}"
+        override val contentType: String = "message"
     }
 
     data class Provisional(val message: ProvisionalMessage) : TimelineEntry {
-        override val stableKey: String = "provisional:${message.id.value}"
-        override val contentType: String = "provisional_message"
+        override val stableKey: String = "message:${message.id.value}"
+        override val contentType: String = "message"
     }
 
     data class CanonicalUnavailable(val explanation: String) : TimelineEntry {

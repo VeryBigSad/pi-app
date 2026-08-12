@@ -9,6 +9,7 @@ import io.github.verybigsad.pimobile.model.TransportPath
 import io.github.verybigsad.pimobile.model.TrustState
 import io.github.verybigsad.pimobile.notifications.NotificationPermissionPolicy
 import io.github.verybigsad.pimobile.notifications.NotificationPermissionStatus
+import io.github.verybigsad.pimobile.push.UnifiedPushProvider
 import io.github.verybigsad.pimobile.push.UnifiedPushProviderState
 import io.github.verybigsad.pimobile.push.UnifiedPushRegistrationState
 import io.github.verybigsad.pimobile.push.UnifiedPushState
@@ -126,6 +127,38 @@ class SettingsMappersTest {
         assertThat(distributor.connected).isTrue()
         assertThat(state.endpointRegistration).isEqualTo(EndpointRegistrationState.REGISTERED)
         assertThat(state.postNotificationsPermission).isEqualTo(NotificationPermissionState.DENIED)
+    }
+
+    @Test
+    fun notificationsRequireExplicitInstalledDistributorSelection() {
+        val push = UnifiedPushState(
+            provider = UnifiedPushProviderState.ProviderSelectionRequired(2),
+        )
+
+        val state = SettingsMappers.notifications(
+            push = push,
+            permission = NotificationPermissionStatus.NOT_REQUIRED,
+            channels = emptyList(),
+            providers = listOf(
+                UnifiedPushProvider("org.example.alpha", "Alpha Push"),
+                UnifiedPushProvider("org.example.beta", "Beta Push"),
+            ),
+        )
+
+        assertThat(state.distributor).isEqualTo(
+            PushDistributorState.SelectionRequired(
+                listOf(
+                    io.github.verybigsad.pimobile.settings.PushDistributorOption(
+                        "org.example.alpha",
+                        "Alpha Push",
+                    ),
+                    io.github.verybigsad.pimobile.settings.PushDistributorOption(
+                        "org.example.beta",
+                        "Beta Push",
+                    ),
+                ),
+            ),
+        )
     }
 
     @Test

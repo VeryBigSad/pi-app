@@ -33,6 +33,7 @@ data class AppActivityActions(
     val onOpenChannelSettings: (channelId: String) -> Unit = {},
     val onOpenAppNotificationSettings: () -> Unit = {},
     val onOpenInstallPermissionSettings: () -> Unit = {},
+    val onOpenVoicePermissionSettings: () -> Unit = {},
 )
 
 /** Entry-point affordances overlaid top-end on the session list. */
@@ -87,6 +88,9 @@ fun SettingsDestination(viewModel: MainViewModel, activityActions: AppActivityAc
             onOpenChannelSettings = activityActions.onOpenChannelSettings,
             onOpenAppNotificationSettings = activityActions.onOpenAppNotificationSettings,
             onRequestNotificationPermission = activityActions.onRequestNotificationPermission,
+            onSelectPushDistributor = viewModel::selectPushProvider,
+            onRequestPushRegistration = viewModel::requestPushRegistration,
+            onUnregisterPush = viewModel::unregisterPush,
             onCheckForUpdates = { viewModel.updateIntegration.checkNow() },
             onOpenUpdateSheet = { viewModel.submit(AppIntent.OpenUpdateSheet) },
         ),

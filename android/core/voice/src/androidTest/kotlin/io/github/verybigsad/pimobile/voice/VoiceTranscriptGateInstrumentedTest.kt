@@ -14,20 +14,23 @@ class VoiceTranscriptGateInstrumentedTest {
         val finals = CopyOnWriteArrayList<VoiceTranscript>()
         val gate = VoiceTranscriptGate(
             object : VoiceTranscriptSink {
-                override fun onPartialDraft(transcript: VoiceTranscript) {
+                override fun onPartialDraft(targetSessionId: String, transcript: VoiceTranscript) {
                     partials += transcript
                 }
 
-                override fun onFinalDraft(transcript: VoiceTranscript) {
+                override fun onFinalDraft(targetSessionId: String, transcript: VoiceTranscript) {
                     finals += transcript
                 }
             },
         )
+        gate.reset(GENERATION)
+        assertThat(gate.begin(SESSION_ID, TARGET_SESSION_ID, GENERATION)).isNull()
 
         fun partial(chunk: Long, revision: Int, text: String) = gate.accept(
+            GENERATION,
             SESSION_ID,
             "voice.partial",
-            """{"sessionId":"$SESSION_ID","chunkSequence":$chunk,"revision":$revision,"text":"$text"}"""
+            """{"sessionId":"$SESSION_ID","chunkSequence":"$chunk","revision":"$revision","text":"$text"}"""
                 .toByteArray(Charsets.UTF_8),
         )
 
@@ -37,9 +40,10 @@ class VoiceTranscriptGateInstrumentedTest {
         assertThat(partial(1, 0, "two")).isNull()
         assertThat(
             gate.accept(
+                GENERATION,
                 SESSION_ID,
                 "voice.finish",
-                """{"sessionId":"$SESSION_ID","chunkSequence":2,"text":"draft one two."}"""
+                """{"sessionId":"$SESSION_ID","chunkSequence":"2","text":"draft one two."}"""
                     .toByteArray(Charsets.UTF_8),
             ),
         ).isNull()
@@ -51,5 +55,7 @@ class VoiceTranscriptGateInstrumentedTest {
 
     private companion object {
         const val SESSION_ID = "123e4567-e89b-42d3-a456-426614174000"
+        const val TARGET_SESSION_ID = "223e4567-e89b-42d3-a456-426614174000"
+        const val GENERATION = 1L
     }
 }

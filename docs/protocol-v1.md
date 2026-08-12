@@ -1,6 +1,6 @@
 # Pi Mobile application protocol v1
 
-Last updated: 2026-08-11
+Last updated: 2026-08-12
 Status: prose contract frozen; executable schemas and cross-language fixtures in progress
 
 This protocol runs inside TLS 1.3. Normal data connections require mTLS. Pairing alone runs in `PAIRING_PROVISIONAL` over inner server-auth TLS pinned by the QR and cannot access sessions or mutations. Remotely, a standing Mac control WSS lets the relay summon a one-use outbound Mac data WSS to pair with Android; locally the inner stream runs directly over TCP. WebSocket boundaries have no protocol meaning.
@@ -40,8 +40,9 @@ Readers must tolerate arbitrary fragmentation/coalescing. Invalid magic, major, 
 | Outbound queue per connection | 512 frames or 8 MiB |
 | Prompt image decoded total | 8 MiB |
 | Connected xterm scrollback | 5,000 lines; not restored after reconnect |
-| Terminal history response | 5,000 entries and 1 MiB, lower limit wins |
-| Voice JSON message body (`voice.audio`, `voice.partial`, `voice.finish`) | 64 KiB |
+| Terminal history response | 5,000 lines and 1 MiB, lower limit wins |
+| Voice JSON message body (`voice.*`) | 64 KiB |
+| Voice PCM chunk | 384,000 bytes (12 seconds) |
 | Voice transcript text (`voice.partial`, `voice.finish`) | 16,384 characters |
 | Agent insights per session (`agents.catalog`) | 256 agents; description 256 characters |
 | Finalized semantic messages retained in memory | 500 |
@@ -55,17 +56,19 @@ The lower applicable bound wins. Length is checked before allocation. Queue exha
 | Size | Field |
 |---:|---|
 | 16 | stream UUID bytes |
-| 4 | chunk sequence, unsigned big-endian |
+| 4 | frame sequence, unsigned big-endian |
 | 8 | byte offset, unsigned big-endian |
 | remaining | data |
 
-A JSON `stream.open` must precede data and defines `streamId`, `purpose`, media type/PCM format, expected length if known, SHA-256 if known, and per-stream limit. `stream.close` supplies final length and SHA-256. Sequence and offset must both be contiguous; otherwise the receiver cancels the stream. Unknown stream, duplicate chunk, overflow, digest mismatch, or data after close is fatal to that stream and reported by `stream.error`. UUID prefix bytes use RFC 4122 network byte order, identical to the 16 bytes represented by canonical UUID hex groups with hyphens removed.
+For `BLOB_CHUNK`, a JSON `stream.open` must precede data and defines `streamId`, purpose, media type, expected length if known, SHA-256 if known, and per-stream limit. `stream.close` supplies final length and SHA-256. Sequence and offset must both be contiguous; otherwise the receiver cancels the stream. Unknown stream, duplicate chunk, overflow, digest mismatch, or data after close is fatal to that stream and reported by `stream.error`. UUID prefix bytes use RFC 4122 network byte order, identical to the 16 bytes represented by canonical UUID hex groups with hyphens removed.
 
 `TERMINAL_BYTES` starts with two unsigned 64-bit big-endian fields: `terminalGeneration` and `sequence`, followed by bytes. Terminal sequences are contiguous per direction. A gap forces `terminal.reset` and tmux redraw; input is never replayed.
 
-Audio v1 is signed 16-bit little-endian, 16 kHz, mono PCM. Any other format requires a negotiated future minor version.
+Audio v1 is signed 16-bit little-endian, 16 kHz, mono PCM. Any other format requires a negotiated future minor version. Android owns microphone VAD and chunking: 300 ms pre-roll, an 8-second preferred speech boundary at 200 ms silence, a 12-second forced boundary, and 500 ms overlap. The Mac never rechunks or runs VAD.
 
-Alongside the binary PCM frames, JSON voice messages are session-scoped and ordered by `chunkSequence` (canonical uint64 decimal text): `voice.audio {sessionId, chunkSequence, final}` marks audio chunk boundaries, `voice.partial {sessionId, chunkSequence, revision, text}` carries a revisable partial transcript, and `voice.finish {sessionId, chunkSequence, text}` carries the final transcript. Voice JSON bodies are bounded to 64 KiB and transcript text to 16,384 characters.
+A READY client opens exactly one voice stream per connection with `voice.start {streamId, sampleRate:16000, channels:1, sampleFormat:"s16le"}`. It then sends non-empty `AUDIO_PCM` frames for that stream. Binary frame sequence is contiguous uint32, byte offset is contiguous uint64, every frame carries at most 65,536 data bytes, each PCM payload is even-sized, and one Android chunk totals at most 384,000 bytes. After each chunk, Android sends the marker `voice.audio {sessionId:streamId, chunkSequence, final}`; `chunkSequence` is contiguous canonical uint64 decimal text. An empty marker is permitted only as the final marker, so silence or an exact already-emitted boundary can close without uploading fabricated PCM. PCM is never base64 or otherwise embedded in JSON.
+
+The host submits complete chunks through its bounded Groq queue and durable quota ledger. Results are serialized in marker order and merged across the 500 ms overlap by Unicode/case/punctuation-normalized tokens while retaining the original transcript spans. `voice.partial {sessionId, chunkSequence, revision, text}` and `voice.finish {sessionId, chunkSequence, text}` carry cumulative transcript text; every uint64 field is canonical decimal text. `voice.finish` follows the final marker after all earlier jobs. Any chunk failure terminally fails that stream: active and queued jobs abort, exactly one `voice.error` is emitted, and late completions cannot emit `voice.partial` or `voice.finish`. `voice.cancel {streamId, reason}` aborts queued and active work. `voice.error {streamId, code, message, ...}` always correlates by `streamId`; quota reset/retry values are canonical decimal text. User cancellation, authentication downgrade, disconnect, and foreground-lease expiry abort the stream. The ledger persists a monotonic effective-time high-water mark in the same immediate SQLite transaction as each reservation; wall-clock rollback or restart cannot reopen rolling windows or UTC budgets, and a forward jump remains pinned conservatively. Transcript output updates the separate editable transcription draft only: it never overwrites typed text and never submits a prompt automatically. Voice JSON bodies are bounded to 64 KiB and transcript text to 16,384 characters.
 
 ## Durable quotas and retention
 
@@ -128,7 +131,7 @@ Connection phases are `PAIRING_PROVISIONAL`, `NEGOTIATING`, `DEVICE_AUTHENTICATE
 | Commands | `command.submit`, `command.query`, `command.state`, `command.result` |
 | Approval | `approval.offer`, `approval.decision`, `approval.expired` |
 | Streams/blobs | `stream.open`, `stream.close`, `stream.cancel`, `stream.error`, `blob.ready`, `blob.release` |
-| Terminal | `terminal.open`, `terminal.ready`, `terminal.resize`, `terminal.key`, `terminal.reset`, `terminal.history.request`, `terminal.history.response`, `terminal.close` |
+| Terminal | `terminal.open`, `terminal.ready`, `terminal.resize`, `terminal.reset`, `terminal.history.request`, `terminal.history.response`, `terminal.close` |
 | Voice | `voice.start`, `voice.audio`, `voice.partial`, `voice.finish`, `voice.cancel`, `voice.error` |
 | Push | `push.endpoint`, `push.endpoint.revoke` |
 
@@ -244,18 +247,22 @@ Android persists `(sessionId, streamEpoch, sequence, leafId)` only after its red
 
 The host sends `agents.catalog {sessions: [{sessionId, agents}]}` on sync and resume. It is the full current snapshot for each included session; each `agents` array has at most 256 entries. An agent is `{agentId, parentAgentId?, description, agentType, status, startedAt, endedAt?, toolUses?, model?}`. `agentId` is an opaque identifier; `parentAgentId` forms the visible subagent tree. `status` is one of `running`, `waiting`, `completed`, `failed`, or `stopped`; descriptions are at most 256 characters. The host sends `agents.update {sessionId, agent}` whenever an agent changes. Receivers upsert the agent by `agentId` in that session. This is current-state telemetry only: no agent history is retained, and a later catalog replaces the displayed set for its session.
 
-- Empty-resume completion: when `sync.resume` carries no per-session work (empty `cursors`, a fresh device with nothing to replay), the host sends `session.catalog`/`agents.catalog` and then `sync.complete` with an empty body `{}` (SYNCING phase, not state-changing). Receivers end their syncing state on `sync.complete`; no `event.ack` is required for it.
+- The host refreshes registry inventory before completion. Session/agent catalogs and updates plus appends observed during SYNCING are bounded and coalesced; every newly discovered session catalog precedes its appends. `sync.complete {}` is the final sync fence: no buffered sync event follows it. Empty inventory sends empty catalogs then completes without `event.ack`.
 - Matching epoch + contiguous retained events: host emits `sync.replay` then ordered batches.
 - Missing range, unknown cursor, epoch mismatch, or leaf mismatch: host emits `sync.reset`; Android drops provisional/live state and retains drafts.
 - Canonical snapshot work runs inside the session actor, blocks bridge mutations, and waits for Pi idle/settled. If a gap occurs while active, `snapshot.waiting` marks transcript/live provisional data unavailable; no partial snapshot is emitted.
 - At idle the host freezes event cursor `F` and issues exactly one canonical `get_entries` request for the attempt. Its entries and eight-hex/null leaf are the sole transcript source and are paged from one immutable response.
 - State/model/thinking/queue/tree/commands queries are optional adjunct pages tagged with `F`; they cannot add, replace, or reorder transcript entries.
-- Finalized transcript appends are announced on the wire by `message.append {sessionId, streamEpoch, appendId}`; `appendId` is a canonical unsigned 64-bit decimal text identifier, never a leaf id. Settlement events are announced by `session.settled {sessionId, settlementId}` carrying an explicit opaque `settlementId`.
-- `snapshot.begin {sessionId, streamEpoch, messageCount, lastAppendId}` opens a snapshot: `messageCount` is the uint64 count of transcript messages and `lastAppendId` is the uint64 `appendId` of the final appended message, or `null` for an empty session. `snapshot.end {sessionId, streamEpoch, messageCount, lastAppendId, leafId, validated: true}` closes it with the same append cursor plus the verified eight-hex/null `leafId`.
+- Every newly persisted canonical record has one contiguous `(sessionId, streamEpoch, sequence)` and is delivered once. Non-final/metadata records use `event.batch {events:[canonicalRecord]}` so Android advances its cursor without fabricating timeline content. A finalized `message_end` uses `message.append`, carrying that same canonical record plus its durable numeric `appendId`; `appendId` is a canonical unsigned 64-bit decimal text identifier, never a leaf id. A sync fence suppresses records already represented by replay/snapshot output before buffered live output is sent. Settlement events are announced by `session.settled {sessionId, settlementId}` carrying an explicit opaque `settlementId`.
+- `snapshot.begin {sessionId, streamEpoch, sequence, messageCount, lastAppendId}` opens a snapshot; uint64 values are canonical decimal text. `messageCount` counts transcript messages and `lastAppendId` is the final durable append-order ID, or `null`. `snapshot.end {sessionId, streamEpoch, sequence, pages, messageCount, lastAppendId, leafId, validated: true}` repeats the exact fence/count/cursor, reports integer page count, and carries the verified eight-hex/null leaf.
 - The first response records `lastAppendId` from its final append-order entry separately from `leafId`. Before publication the host calls validation-only `get_entries {since: lastAppendId}`; for an empty session it repeats a full query. It must return no new append-order entries and the same leaf. This response is never merged; any entry or leaf change discards the attempt and retries from idle. The leaf itself is never used as an append cursor because a branched session may point behind later off-branch entries.
 - `snapshot.end` carries the verified leaf. Android commits atomically, acknowledges, then receives retained events strictly after `F`.
 
 Events are never silently skipped. Duplicate committed events are ignored by cursor. A next noncontiguous sequence is a gap, not best effort.
+
+### Opaque push wake
+
+UnifiedPush delivery is outside PIMB framing. The ntfy POST body is exactly one unpadded base64url ASCII wake ID (`A-Z`, `a-z`, `0-9`, `-`, `_`), 22–128 bytes with no whitespace or envelope; the host generates 32 random bytes, encoded as 43 characters. It contains no settlement, session, sequence, or timestamp metadata. Android rejects any payload outside this contract before scheduling reconnect, durably deduplicates accepted wake IDs, and treats a wake only as a trigger for authenticated catch-up.
 
 ## Extension UI
 
@@ -269,7 +276,9 @@ RPC produces no event when `ctx.ui.custom()` returns `undefined`. Therefore the 
 
 ## Terminal reconnect and history
 
-`terminalGeneration` changes on reconnect. The new xterm receives only the current visible pane/redraw; connected-client 5,000-line scrollback is not serialized or replayed. `terminal.history.request {sessionId, beforeSequence, limit}` pages read-only terminal history for a session: `beforeSequence` is the exclusive upper terminal-byte sequence (`null` asks for the latest page) and `limit` is the maximum entry count, bounded to 5,000. `terminal.history.response {sessionId, entries, truncated}` returns up to `limit` string entries plus a `truncated` flag, bounded to 5,000 entries/1 MiB, lower limit wins. It renders in a separate history drawer and never feeds xterm, Pi stdin, or replay state. No UI may call it full or restored scrollback.
+`terminal.open {sessionId, columns, rows}` is client-to-host. The host replies `terminal.ready {terminalGeneration, sequence, columns, rows}`; `terminalGeneration` and every terminal byte sequence are uint64 decimal text in JSON and unsigned 64-bit binary prefixes in `TERMINAL_BYTES`. `terminal.resize {terminalGeneration, columns, rows}` and `terminal.close {terminalGeneration, reason}` are client-to-host and reject a stale generation. `terminal.reset {terminalGeneration, reason}` is host-to-client only; the client closes that generation and opens a fresh attachment. `terminal.key` is reserved for a future negotiated minor; v1 xterm input uses `TERMINAL_BYTES` only.
+
+`terminalGeneration` changes on reconnect. The new xterm receives only the current visible pane/redraw; connected-client 5,000-line scrollback is not serialized or replayed. `terminal.history.request {sessionId, terminalGeneration, maxLines, maxBytes}` asks the active private-tmux attachment for one read-only bounded `capture-pane` tail. `sessionId` identifies that private tmux session and `terminalGeneration` must be the currently attached uint64 decimal generation; both prevent a stale drawer request from reading a reattached terminal. `maxLines` is 1–5,000 and `maxBytes` is 1–1,048,576; a request outside either bound is rejected rather than clamped. `terminal.history.response {sessionId, terminalGeneration, capturedAt, text, truncatedLines, truncatedBytes}` returns the UTF-8 capture tail. It never claims sequence paging: terminal-byte sequence orders live wire frames, not tmux scrollback. The response is bounded to 5,000 lines and 1 MiB, lower limit wins; each truncation flag identifies which bound shortened the capture. It renders in a separate history drawer and never feeds xterm, Pi stdin, or replay state. No UI may call it full or restored scrollback.
 
 ## Errors and closure
 

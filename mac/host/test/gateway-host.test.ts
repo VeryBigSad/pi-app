@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   FrameKind,
   assertEnvelope,
@@ -52,6 +52,8 @@ const sha256 = "a".repeat(64);
 class MemoryEndpoint implements ByteTransport {
   peer: MemoryEndpoint | undefined;
   readonly closeCodes: string[] = [];
+  failWrites = false;
+  onWrite: ((bytes: Uint8Array) => void) | undefined;
   private readonly incoming: Uint8Array[] = [];
   private readonly readers: ((value: Uint8Array | null) => void)[] = [];
   private ended = false;
@@ -74,9 +76,11 @@ class MemoryEndpoint implements ByteTransport {
 
   write(bytes: Uint8Array, signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();
+    if (this.failWrites) throw new Error("forced transport write failure");
     const peer = this.peer;
     if (peer === undefined || peer.ended) throw new Error("transport closed");
     peer.enqueue(bytes.slice());
+    this.onWrite?.(bytes);
     return Promise.resolve();
   }
 
@@ -311,7 +315,15 @@ function defaultOptions(overrides: Partial<HostGatewayOptions> = {}): HostGatewa
       verifyAssertion: (_response, _binding, complete) => Promise.resolve(complete({ userId: "owner", credentialId: "credential" })),
     },
     sync: {
-      prepare: () => Promise.resolve({ kind: "replay", sessionId, streamEpoch, fromSequence: 0n, throughSequence: 0n, events: [] }),
+      catalog: () => Promise.resolve([hostCatalogEntry(sessionId)]),
+      prepare: () => Promise.resolve({
+        kind: "replay",
+        sessionId,
+        streamEpoch,
+        fromSequence: 0n,
+        throughSequence: 1n,
+        events: [{ sessionId, streamEpoch, sequence: "1", piType: "agent_end" }],
+      }),
       committed: () => Promise.resolve(),
     },
     journal: new MemoryJournal(),
@@ -333,6 +345,58 @@ function defaultOptions(overrides: Partial<HostGatewayOptions> = {}): HostGatewa
       }),
     },
     ...overrides,
+  };
+}
+
+function canonicalEvent(
+  sequence: string,
+  piType: string,
+  eventSessionId = sessionId,
+  eventStreamEpoch = streamEpoch,
+): JsonObject {
+  const rawJson = JSON.stringify({ type: piType });
+  return {
+    sessionId: eventSessionId,
+    streamEpoch: eventStreamEpoch,
+    sequence,
+    piType,
+    projection: { type: piType },
+    rawJson,
+    rawSize: String(Buffer.byteLength(rawJson, "utf8")),
+    rawSha256: createHash("sha256").update(rawJson, "utf8").digest("hex"),
+  };
+}
+
+function finalCanonicalEvent(sequence: string, appendId: string): JsonObject {
+  const rawJson = "{\"type\":\"message_end\"}";
+  return {
+    sessionId,
+    streamEpoch,
+    sequence,
+    appendId,
+    piType: "message_end",
+    projection: {
+      type: "message_end",
+      message: { id: "m-final", role: "assistant", content: [{ type: "text", text: "final" }] },
+    },
+    rawJson,
+    rawSize: String(Buffer.byteLength(rawJson, "utf8")),
+    rawSha256: createHash("sha256").update(rawJson, "utf8").digest("hex"),
+  };
+}
+
+function hostCatalogEntry(id: string): JsonObject {
+  return {
+    sessionId: id,
+    provider: "anthropic",
+    model: "claude",
+    thinkingLevel: "high",
+    repo: "/tmp/pi-app",
+    worktree: null,
+    cwd: "/tmp/pi-app",
+    parentId: null,
+    createdAt: "2026-08-01T00:00:00.000Z",
+    updatedAt: "2026-08-12T00:00:00.000Z",
   };
 }
 
@@ -362,12 +426,15 @@ async function attachReady(
   expect((await client.receive()).type).toBe("auth.assertion.options");
   await client.send("auth.assertion.response", { credential: "opaque-response" });
   expect((await client.receive()).type).toBe("auth.result");
-  await client.send("sync.resume", { cursors: [{ sessionId, streamEpoch, sequence: "0", leafId: null }] });
-  expect((await client.receive()).type).toBe("sync.replay");
-  await client.send("event.ack", { sessionId, streamEpoch, sequence: "0" });
+  const resumeId = await client.send("sync.resume", { cursors: [{ sessionId, streamEpoch, sequence: "0", leafId: null }] });
+  expect(await client.receive()).toMatchObject({ type: "session.catalog", replyTo: resumeId });
+  expect(await client.receive()).toMatchObject({ type: "sync.replay", replyTo: resumeId });
+  expect(await client.receive()).toMatchObject({ type: "event.batch", body: { events: [{ sequence: "1" }] } });
+  await client.send("event.ack", { sessionId, streamEpoch, sequence: "1" });
+  expect(await client.receive()).toMatchObject({ type: "sync.complete", body: {}, replyTo: resumeId });
+  await waitUntil(() => connection.phase() === "READY");
   await client.send("ping", { foregroundLease: true });
   expect((await client.receive()).type).toBe("pong");
-  await waitUntil(() => connection.phase() === "READY");
   expect(connection.phase()).toBe("READY");
   return { connection, client, pair };
 }
@@ -504,6 +571,197 @@ describe("host gateway transport and authorization", () => {
     await client.send("command.submit", commandBody());
     expect(await client.receive()).toMatchObject({ type: "error", body: { code: "SYNC_REQUIRED" } });
     expect((options.journal as MemoryJournal).records.size).toBe(0);
+    await gateway.close();
+  });
+
+  it("emits one empty-resume completion replying to the resume before serving READY traffic", async () => {
+    let prepares = 0;
+    const gateway = createHostGateway(defaultOptions({
+      sync: {
+        catalog: () => Promise.resolve([]),
+        listAll: () => Promise.resolve([]),
+        prepare: () => {
+          prepares += 1;
+          return Promise.reject(new Error("prepare must not run"));
+        },
+        committed: () => Promise.resolve(),
+      },
+    }));
+    const pair = transportPair();
+    const client = new TestClient(pair.client);
+    const connection = admitNormal(gateway, pair.server);
+    await client.send("client.hello", { minMinor: 0, maxMinor: 0, appVersion: "1", deviceId, features: [] });
+    await client.receive();
+    await client.receive();
+    await client.send("auth.assertion.response", { credential: "opaque" });
+    await client.receive();
+
+    const resumeId = await client.send("sync.resume", { cursors: [] });
+    expect(await client.receive()).toMatchObject({ type: "session.catalog", body: { sessions: [] }, replyTo: resumeId });
+    expect(await client.receive()).toMatchObject({ type: "agents.catalog", body: { sessions: [] }, replyTo: resumeId });
+    expect(await client.receive()).toMatchObject({ type: "sync.complete", body: {}, replyTo: resumeId });
+    await waitUntil(() => connection.phase() === "READY");
+    await client.send("ping");
+    expect((await client.receive()).type).toBe("pong");
+    expect(prepares).toBe(0);
+    await gateway.close();
+  });
+
+  it("buffers live canonical events until host completion is sent and then enters READY", async () => {
+    const gateway = createHostGateway(defaultOptions());
+    const pair = transportPair();
+    const client = new TestClient(pair.client);
+    const connection = admitNormal(gateway, pair.server);
+    await client.send("client.hello", { minMinor: 0, maxMinor: 0, appVersion: "1", deviceId, features: [] });
+    await client.receive();
+    await client.receive();
+    await client.send("auth.assertion.response", { credential: "opaque" });
+    await client.receive();
+    const resumeId = await client.send("sync.resume", { cursors: [{ sessionId, streamEpoch, sequence: "0", leafId: null }] });
+    await client.receive();
+    await client.receive();
+    await client.receive();
+
+    // The replay has already emitted sequence 1; a concurrent duplicate must not
+    // be re-published after the completion fence.
+    gateway.publishToReady("event.batch", { events: [canonicalEvent("1", "agent_end")] });
+    gateway.publishToReady("event.batch", { events: [canonicalEvent("2", "agent_end")] });
+    expect(connection.phase()).toBe("SYNCING");
+    await client.send("event.ack", { sessionId, streamEpoch, sequence: "1" });
+    expect(await client.receive()).toMatchObject({ type: "event.batch", body: { events: [{ sequence: "2", piType: "agent_end" }] } });
+    expect(await client.receive()).toMatchObject({ type: "sync.complete", replyTo: resumeId });
+    await waitUntil(() => connection.phase() === "READY");
+    await gateway.close();
+  });
+
+  it("delivers every post-sync canonical record once, preserving metadata and final ordering", async () => {
+    const ready = await readyConnection();
+    ready.gateway.publishToReady("event.batch", { events: [canonicalEvent("2", "agent_start")] });
+    ready.gateway.publishToReady("event.batch", { events: [canonicalEvent("3", "message_update")] });
+    ready.gateway.publishToReady("message.append", { ...finalCanonicalEvent("4", "2"), appendId: "2" });
+    // Re-emitting an already persisted sequence cannot produce a duplicate final delivery.
+    ready.gateway.publishToReady("message.append", { ...finalCanonicalEvent("4", "2"), appendId: "2" });
+
+    expect(await ready.client.receive()).toMatchObject({ type: "event.batch", body: { events: [{ sequence: "2", piType: "agent_start" }] } });
+    expect(await ready.client.receive()).toMatchObject({ type: "event.batch", body: { events: [{ sequence: "3", piType: "message_update" }] } });
+    expect(await ready.client.receive()).toMatchObject({ type: "message.append", body: { sequence: "4", appendId: "2", piType: "message_end" } });
+    await ready.gateway.close();
+  });
+
+  it("queues a live append published at the sync completion fence without closing", async () => {
+    const gateway = createHostGateway(defaultOptions());
+    const pair = transportPair();
+    let completionAppendQueued = false;
+    pair.server.onWrite = (frame) => {
+      if (frame[5] !== FrameKind.Json) return;
+      const envelope = decodeJsonPayload(frame.subarray(12));
+      if (envelope["type"] !== "sync.complete" || completionAppendQueued) return;
+      completionAppendQueued = true;
+      gateway.publishToReady("message.append", {
+        sessionId,
+        streamEpoch,
+        sequence: "2",
+        appendId: "2",
+        piType: "message_end",
+        projection: { type: "message_end" },
+        rawJson: "{\"type\":\"message_end\"}",
+        rawSize: "22",
+        rawSha256: sha256,
+      });
+    };
+    const client = new TestClient(pair.client);
+    const connection = admitNormal(gateway, pair.server);
+    await client.send("client.hello", { minMinor: 0, maxMinor: 0, appVersion: "1", deviceId, features: [] });
+    await client.receive();
+    await client.receive();
+    await client.send("auth.assertion.response", { credential: "opaque" });
+    await client.receive();
+    const resumeId = await client.send("sync.resume", { cursors: [{ sessionId, streamEpoch, sequence: "0", leafId: null }] });
+    await client.receive();
+    await client.receive();
+    await client.receive();
+    await client.send("event.ack", { sessionId, streamEpoch, sequence: "1" });
+    expect(await client.receive()).toMatchObject({ type: "sync.complete", replyTo: resumeId });
+    expect(await client.receive()).toMatchObject({ type: "message.append", body: { appendId: "2", sequence: "2" } });
+    await waitUntil(() => connection.phase() === "READY");
+    expect(pair.server.closeCodes).not.toContain("PROTOCOL_VIOLATION");
+    await gateway.close();
+  });
+
+  it("refreshes inventory and sends a new-session catalog before buffered appends and the completion fence", async () => {
+    const newSessionId = "650e8400-e29b-41d4-a716-446655440003";
+    let catalog = [hostCatalogEntry(sessionId)];
+    const gateway = createHostGateway(defaultOptions({
+      sync: {
+        catalog: () => Promise.resolve(catalog),
+        prepare: () => Promise.resolve({
+          kind: "replay",
+          sessionId,
+          streamEpoch,
+          fromSequence: 0n,
+          throughSequence: 1n,
+          events: [{ sessionId, streamEpoch, sequence: "1", piType: "agent_end" }],
+        }),
+        committed: () => Promise.resolve(),
+      },
+    }));
+    const pair = transportPair();
+    const client = new TestClient(pair.client);
+    const connection = admitNormal(gateway, pair.server);
+    await client.send("client.hello", { minMinor: 0, maxMinor: 0, appVersion: "1", deviceId, features: [] });
+    await client.receive();
+    await client.receive();
+    await client.send("auth.assertion.response", { credential: "opaque" });
+    await client.receive();
+    const resumeId = await client.send("sync.resume", { cursors: [{ sessionId, streamEpoch, sequence: "0", leafId: null }] });
+    await client.receive();
+    await client.receive();
+    await client.receive();
+    catalog = [hostCatalogEntry(sessionId), hostCatalogEntry(newSessionId)];
+    gateway.publishToReady("event.batch", {
+      events: [canonicalEvent("1", "agent_end", newSessionId, "650e8400-e29b-41d4-a716-446655440004")],
+    });
+    await client.send("event.ack", { sessionId, streamEpoch, sequence: "1" });
+    expect(await client.receive()).toMatchObject({ type: "session.catalog", body: { sessions: catalog } });
+    expect(await client.receive()).toMatchObject({ type: "event.batch", body: { events: [{ sessionId: newSessionId }] } });
+    expect(await client.receive()).toMatchObject({ type: "sync.complete", replyTo: resumeId });
+    await waitUntil(() => connection.phase() === "READY");
+    await gateway.close();
+  });
+
+  it("closes fail-closed when a READY live event cannot be sent", async () => {
+    const gateway = createHostGateway(defaultOptions());
+    const ready = await attachReady(gateway);
+    ready.pair.server.failWrites = true;
+    gateway.publishToReady("event.batch", { events: [canonicalEvent("2", "agent_end")] });
+    await ready.connection.closed();
+    expect(ready.connection.phase()).toBe("CLOSING");
+    expect(ready.pair.server.closeCodes).toContain("PROTOCOL_VIOLATION");
+    await gateway.close();
+  });
+
+  it("emits no completion when synchronization preparation fails", async () => {
+    const gateway = createHostGateway(defaultOptions({
+      sync: {
+        catalog: () => Promise.resolve([hostCatalogEntry(sessionId)]),
+        prepare: () => Promise.reject(new Error("snapshot failed")),
+        committed: () => Promise.resolve(),
+      },
+    }));
+    const pair = transportPair();
+    const client = new TestClient(pair.client);
+    const connection = admitNormal(gateway, pair.server);
+    await client.send("client.hello", { minMinor: 0, maxMinor: 0, appVersion: "1", deviceId, features: [] });
+    await client.receive();
+    await client.receive();
+    await client.send("auth.assertion.response", { credential: "opaque" });
+    await client.receive();
+
+    const resumeId = await client.send("sync.resume", { cursors: [{ sessionId, streamEpoch, sequence: "0", leafId: null }] });
+    expect(await client.receive()).toMatchObject({ type: "session.catalog", replyTo: resumeId });
+    expect(await client.receive()).toMatchObject({ type: "error", replyTo: resumeId });
+    await connection.closed();
+    expect(connection.phase()).toBe("CLOSING");
     await gateway.close();
   });
 
@@ -664,83 +922,83 @@ describe("host gateway transport and authorization", () => {
     expect(() => createHostGateway(defaultOptions({ passkeySessionTtlMs: 30_000 }))).toThrow(RangeError);
   });
 
-  it("streams voice transcripts as voice.partial with monotonic revisions and voice.finish", async () => {
-    const audio = Buffer.alloc(64, 1).toString("base64url");
-    const submitted: { sessionId: string; chunkSequence: number; final: boolean; bytes: number }[] = [];
+  it("accepts contiguous AudioPcm frames and emits ordered cumulative transcripts", async () => {
+    const submitted: { sessionId: string; chunkSequence: bigint; final: boolean; bytes: number }[] = [];
     const ready = await readyConnection(defaultOptions({
       voice: {
-        submit: async (chunk, sink, signal) => {
+        submit: (chunk) => {
           submitted.push({ sessionId: chunk.sessionId, chunkSequence: chunk.chunkSequence, final: chunk.final, bytes: chunk.pcm16le.byteLength });
-          await sink.partial({ sessionId: chunk.sessionId, chunkSequence: chunk.chunkSequence, revision: 1, text: "hel" }, signal);
-          await sink.partial({ sessionId: chunk.sessionId, chunkSequence: chunk.chunkSequence, revision: 2, text: "hello" }, signal);
-          if (chunk.final) await sink.finish({ sessionId: chunk.sessionId, chunkSequence: chunk.chunkSequence, text: "hello" }, signal);
+          return Promise.resolve(chunk.chunkSequence === 0n ? "hello world" : "world again");
         },
       },
     }));
-    await ready.client.send("voice.audio", { sessionId, chunkSequence: 0, final: true, audio });
-    expect(await ready.client.receive()).toMatchObject({ type: "voice.partial", body: { sessionId, chunkSequence: 0, revision: 1, text: "hel" } });
-    expect(await ready.client.receive()).toMatchObject({ type: "voice.partial", body: { sessionId, chunkSequence: 0, revision: 2, text: "hello" } });
-    expect(await ready.client.receive()).toMatchObject({ type: "voice.finish", body: { sessionId, chunkSequence: 0, text: "hello" } });
-    expect(submitted).toEqual([{ sessionId, chunkSequence: 0, final: true, bytes: 64 }]);
+    await ready.client.send("voice.start", { streamId: sessionId, sampleRate: 16_000, channels: 1, sampleFormat: "s16le" });
+    await ready.client.sendBinary(FrameKind.AudioPcm, encodeStreamPayload({ streamId: sessionId, sequence: 0, offset: 0n, data: Buffer.alloc(64, 1) }));
+    await ready.client.send("voice.audio", { sessionId, chunkSequence: "0", final: false });
+    await ready.client.sendBinary(FrameKind.AudioPcm, encodeStreamPayload({ streamId: sessionId, sequence: 1, offset: 64n, data: Buffer.alloc(32, 2) }));
+    await ready.client.send("voice.audio", { sessionId, chunkSequence: "1", final: true });
+
+    expect(await ready.client.receive()).toMatchObject({ type: "voice.partial", body: { sessionId, chunkSequence: "0", revision: "1", text: "hello world" } });
+    expect(await ready.client.receive()).toMatchObject({ type: "voice.partial", body: { sessionId, chunkSequence: "1", revision: "2", text: "hello world again" } });
+    expect(await ready.client.receive()).toMatchObject({ type: "voice.finish", body: { sessionId, chunkSequence: "1", text: "hello world again" } });
+    expect(submitted).toEqual([
+      { sessionId, chunkSequence: 0n, final: false, bytes: 64 },
+      { sessionId, chunkSequence: 1n, final: true, bytes: 32 },
+    ]);
     await ready.gateway.close();
   });
 
-  it("rejects non-monotonic voice revisions and oversized or malformed voice.audio", async () => {
-    const audio = Buffer.alloc(64, 1).toString("base64url");
-    const ready = await readyConnection(defaultOptions({
-      voice: {
-        submit: async (chunk, sink, signal) => {
-          await sink.partial({ sessionId: chunk.sessionId, chunkSequence: chunk.chunkSequence, revision: 1, text: "a" }, signal);
-          await sink.partial({ sessionId: chunk.sessionId, chunkSequence: chunk.chunkSequence, revision: 1, text: "b" }, signal);
-        },
-      },
-    }));
-    await ready.client.send("voice.audio", { sessionId, chunkSequence: 3, final: false, audio });
-    expect(await ready.client.receive()).toMatchObject({ type: "voice.partial", body: { chunkSequence: 3, revision: 1 } });
-    expect(await ready.client.receive()).toMatchObject({ type: "voice.error", body: { sessionId, chunkSequence: 3, code: "PROTOCOL_VIOLATION" } });
+  it("terminally fails AudioPcm gaps and rejects second streams and JSON PCM", async () => {
+    const ready = await readyConnection(defaultOptions({ voice: { submit: () => Promise.resolve("unused") } }));
+    await ready.client.send("voice.start", { streamId: sessionId, sampleRate: 16_000, channels: 1, sampleFormat: "s16le" });
+    await ready.client.sendBinary(FrameKind.AudioPcm, encodeStreamPayload({ streamId: sessionId, sequence: 1, offset: 0n, data: Buffer.alloc(2) }));
+    expect(await ready.client.receive()).toMatchObject({ type: "voice.error", body: { streamId: sessionId, code: "STREAM_INVALID" } });
     await ready.gateway.close();
 
-    for (const body of [
-      { sessionId, chunkSequence: -1, final: false, audio },
-      { sessionId, chunkSequence: 0, final: false, audio: "!!!" },
-      { sessionId, chunkSequence: 0, final: "yes", audio },
-    ]) {
-      const malformed = await readyConnection(defaultOptions({ voice: { submit: () => Promise.resolve() } }));
-      await malformed.client.send("voice.audio", body);
-      expect(await malformed.client.receive()).toMatchObject({ type: "error", body: { code: "PROTOCOL_VIOLATION" } });
-      await malformed.gateway.close();
-    }
+    const duplicate = await readyConnection(defaultOptions({ voice: { submit: () => Promise.resolve("unused") } }));
+    await duplicate.client.send("voice.start", { streamId: sessionId, sampleRate: 16_000, channels: 1, sampleFormat: "s16le" });
+    await duplicate.client.send("voice.start", { streamId, sampleRate: 16_000, channels: 1, sampleFormat: "s16le" });
+    expect(await duplicate.client.receive()).toMatchObject({ type: "error", body: { code: "RESOURCE_EXHAUSTED" } });
+    await duplicate.gateway.close();
+
+    const jsonPcm = await readyConnection(defaultOptions({ voice: { submit: () => Promise.resolve("unused") } }));
+    await jsonPcm.client.send("voice.audio", { sessionId, chunkSequence: "0", final: true, audio: "AQI" });
+    expect(await jsonPcm.client.receive()).toMatchObject({ type: "error", body: { code: "PROTOCOL_VIOLATION" } });
+    await jsonPcm.gateway.close();
   });
 
-  it("reports voice runtime failures as voice.error with the runtime code", async () => {
+  it("reports runtime failures as voice.error correlated by streamId", async () => {
     const ready = await readyConnection(defaultOptions({
       voice: {
         submit: () => {
-          const error = new Error("quota");
-          (error as Error & { code: string }).code = "VOICE_QUOTA";
+          const error = new Error("VOICE_RPM_LIMIT") as Error & { code: string; resetAtMs: number };
+          error.code = "VOICE_QUOTA";
+          error.resetAtMs = 1_000;
           return Promise.reject(error);
         },
       },
     }));
-    await ready.client.send("voice.audio", { sessionId, chunkSequence: 9, final: false, audio: Buffer.alloc(64, 2).toString("base64url") });
-    expect(await ready.client.receive()).toMatchObject({ type: "voice.error", body: { sessionId, chunkSequence: 9, code: "VOICE_QUOTA" } });
+    await ready.client.send("voice.start", { streamId: sessionId, sampleRate: 16_000, channels: 1, sampleFormat: "s16le" });
+    await ready.client.sendBinary(FrameKind.AudioPcm, encodeStreamPayload({ streamId: sessionId, sequence: 0, offset: 0n, data: Buffer.alloc(64, 2) }));
+    await ready.client.send("voice.audio", { sessionId, chunkSequence: "0", final: false });
+    expect(await ready.client.receive()).toMatchObject({
+      type: "voice.error",
+      body: { streamId: sessionId, code: "VOICE_QUOTA", detailCode: "VOICE_RPM_LIMIT", resetAtEpochMilliseconds: "1000" },
+    });
     await ready.gateway.close();
   });
 
-  it("publishes live message.append and session.settlement events only to READY connections", async () => {
+  it("publishes conformed message.append and session.settled events only to READY connections", async () => {
     const ready = await readyConnection();
     ready.gateway.publishToReady("message.append", {
-      appendId: "550e8400-e29b-41d4-a716-446655440020",
-      sessionId,
-      streamEpoch,
-      sequence: "7",
-      record: { type: "message_end" },
+      ...canonicalEvent("7", "message_end"),
+      appendId: "7",
     });
     expect(await ready.client.receive()).toMatchObject({
       type: "message.append",
-      body: { appendId: "550e8400-e29b-41d4-a716-446655440020", sessionId, streamEpoch, sequence: "7" },
+      body: { appendId: "7", sessionId, streamEpoch, sequence: "7" },
     });
-    ready.gateway.publishToReady("session.settlement", {
+    ready.gateway.publishToReady("session.settled", {
       settlementId: "550e8400-e29b-41d4-a716-446655440021",
       sessionId,
       streamEpoch,
@@ -748,7 +1006,7 @@ describe("host gateway transport and authorization", () => {
       settledAtMs: 42,
     });
     expect(await ready.client.receive()).toMatchObject({
-      type: "session.settlement",
+      type: "session.settled",
       body: { settlementId: "550e8400-e29b-41d4-a716-446655440021", sessionId, sequence: "7" },
     });
     await ready.gateway.close();
@@ -757,7 +1015,7 @@ describe("host gateway transport and authorization", () => {
     const pair = transportPair();
     const client = new TestClient(pair.client);
     admitNormal(pending, pair.server);
-    pending.publishToReady("message.append", { sessionId });
+    pending.publishToReady("event.batch", { events: [canonicalEvent("8", "agent_end")] });
     await client.send("ping");
     expect((await client.receive()).type).toBe("pong");
     await pending.close();
@@ -816,6 +1074,7 @@ describe("host gateway transport and authorization", () => {
     let terminalOutput: TerminalOutput | undefined;
     const terminalWrites: Uint8Array[] = [];
     const terminalResets: string[] = [];
+    const historyRequests: JsonObject[] = [];
     const ready = await readyConnection(defaultOptions({
       blobs,
       terminal: {
@@ -831,6 +1090,17 @@ describe("host gateway transport and authorization", () => {
               reset: (reason) => {
                 terminalResets.push(reason);
                 return Promise.resolve();
+              },
+              history: (request) => {
+                historyRequests.push(request);
+                return Promise.resolve({
+                  sessionId,
+                  terminalGeneration: "9",
+                  capturedAt: "2026-08-09T12:00:00.000Z",
+                  text: "tmux capture",
+                  truncatedLines: false,
+                  truncatedBytes: true,
+                });
               },
               close: () => Promise.resolve(),
             },
@@ -854,6 +1124,23 @@ describe("host gateway transport and authorization", () => {
 
     await ready.client.send("terminal.open", { sessionId });
     expect(await ready.client.receive()).toMatchObject({ type: "terminal.ready", body: { terminalGeneration: "9" } });
+    await ready.client.send("terminal.history.request", {
+      sessionId,
+      terminalGeneration: "9",
+      maxLines: 5_000,
+      maxBytes: 1_024,
+    });
+    expect(await ready.client.receive()).toMatchObject({
+      type: "terminal.history.response",
+      body: { sessionId, terminalGeneration: "9", text: "tmux capture", truncatedLines: false, truncatedBytes: true },
+    });
+    expect(historyRequests).toEqual([{
+      sessionId,
+      terminalGeneration: "9",
+      maxLines: 5_000,
+      maxBytes: 1_024,
+    }]);
+
     await ready.client.sendBinary(FrameKind.TerminalBytes, encodeTerminalPayload({ terminalGeneration: 9n, sequence: 0n, data: Uint8Array.of(4, 5) }));
     await waitUntil(() => terminalWrites.length === 1);
     expect(terminalWrites).toEqual([Uint8Array.of(4, 5)]);

@@ -246,6 +246,7 @@ describe("host agents emission wiring", () => {
 
     const sent: { type: string; body: JsonObject }[] = [];
     const runtime: SyncRuntime = {
+      catalog: () => Promise.resolve([]),
       prepare: () => Promise.resolve(plan as GatewaySyncPlan),
       committed: () => Promise.resolve(),
     };
@@ -256,8 +257,8 @@ describe("host agents emission wiring", () => {
     const signal = new AbortController().signal;
     await sequencer.start({ cursors: [{ sessionId, streamEpoch, sequence: "0", leafId: null }] }, "550e8400-e29b-41d4-a716-446655440062", signal);
     expect(sent.map((frame) => frame.type)).toEqual([
-      "sync.reset",
       "session.catalog",
+      "sync.reset",
       "agents.catalog",
       "snapshot.begin",
       "snapshot.end",
@@ -270,6 +271,6 @@ describe("host agents emission wiring", () => {
     assertWireMessage("agents.catalog", catalogBody as unknown as JsonObject);
     expect(JSON.stringify(catalogBody)).not.toContain("args");
     expect(JSON.stringify(catalogBody)).not.toContain("result");
-    await sequencer.acknowledge({ sessionId, streamEpoch, sequence: "0" }, signal);
+    await sequencer.acknowledge({ sessionId, streamEpoch: plan.streamEpoch, sequence: "0" }, signal);
   });
 });

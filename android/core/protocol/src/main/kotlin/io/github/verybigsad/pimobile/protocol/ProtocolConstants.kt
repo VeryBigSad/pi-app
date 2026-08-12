@@ -54,6 +54,7 @@ object ProtocolConstants {
     const val approvalDecisionMilliseconds = 120_000L
     const val approvalHookMilliseconds = 150_000L
     const val maxVoiceBodyBytes = 65_536
+    const val maxVoiceChunkBytes = 384_000
     const val maxVoiceTextChars = 16_384
     const val maxAgents = 256
     val hardBounds = mapOf(
@@ -105,6 +106,7 @@ object ProtocolConstants {
         "approvalDecisionMilliseconds" to approvalDecisionMilliseconds,
         "approvalHookMilliseconds" to approvalHookMilliseconds,
         "voiceBodyBytes" to maxVoiceBodyBytes.toLong(),
+        "voiceChunkBytes" to maxVoiceChunkBytes.toLong(),
         "voiceTextChars" to maxVoiceTextChars.toLong(),
         "maxAgents" to maxAgents.toLong(),
     )

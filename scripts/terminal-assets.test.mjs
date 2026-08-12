@@ -76,11 +76,21 @@ describe("terminal assets", () => {
     expect(html).toContain("default-src 'none'");
     expect(html).toContain("connect-src 'none'");
     expect(html).toContain("frame-src 'none'");
+    expect(html).toContain("style-src 'self'");
+    // Chromium 91 classifies script-set style attributes under style-src-elem.
+    // xterm needs dynamic textarea/canvas/IME sizing, so both CSP3 directives allow
+    // inline values while external stylesheets and every script source remain local-only.
+    expect(html).toContain("style-src-elem 'self' 'unsafe-inline'");
+    expect(html).toContain("style-src-attr 'unsafe-inline'");
+    expect(html).not.toContain("style-src 'unsafe-inline'");
     expect(html).not.toMatch(/(?:src|href)="(?:https?:)?\/\//);
     const runtime = await readFile(resolve(root, "android/terminal/src/main/kotlin/io/github/verybigsad/pimobile/terminal/TerminalRuntime.kt"), "utf8");
     expect(runtime).not.toContain("addJavascriptInterface");
     expect(runtime).toContain("setOf(TerminalAssetOrigin)");
+    expect(runtime).toContain("allowFileAccess = false");
+    expect(runtime).toContain("allowContentAccess = false");
     expect(runtime).toContain("blockNetworkLoads = true");
+    expect(runtime).toContain("override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = true");
   });
 
   it("retains xterm IME, key-release, focus, paste, and resize paths", async () => {
@@ -98,6 +108,25 @@ describe("terminal assets", () => {
     expect(runtime).toContain("new ResizeObserver");
     expect(runtime).toContain('inputmode", "text"');
     expect(runtime).toContain('addEventListener("focus"');
+    expect(runtime).toContain("function styleCanary");
+    expect(runtime).toContain('propertyProbe.style.position = "fixed"');
+    expect(runtime).toContain('attributeProbe.setAttribute("style", "position: absolute")');
+    expect(runtime).toContain('document.createElement("style")');
+    expect(runtime.indexOf("const styleChecks = styleCanary()")).toBeLessThan(runtime.indexOf("const terminal = new Terminal"));
+    expect(runtime.indexOf("const styleChecks = styleCanary()")).toBeLessThan(runtime.lastIndexOf('report({ type: "terminal.ready", canaryOk: true })'));
+    expect(runtime).toContain("TERMINAL_RUNTIME_STYLE_POLICY_FAILED_");
+    expect(runtime).toContain("terminal.parser.registerOscHandler(8, () => {");
+    expect(runtime).toContain("osc8Suppressed = true");
+    expect(runtime).not.toContain("window.open");
+  });
+
+  it("consumes OSC8 hyperlinks without navigation", async () => {
+    const runtime = await readFile(resolve(root, "android/terminal/web/src/terminal.ts"), "utf8");
+    const handler = runtime.indexOf("terminal.parser.registerOscHandler(8, () => {");
+    expect(handler).toBeGreaterThanOrEqual(0);
+    expect(runtime.slice(handler, handler + 128)).toContain("return true");
+    expect(handler).toBeLessThan(runtime.indexOf("terminal.open(root)"));
+    expect(runtime).toContain("osc8Suppressed,");
   });
 
   it("installs the structuredClone shim synchronously before the canary probe", async () => {
@@ -132,7 +161,10 @@ describe("terminal assets", () => {
     const runtime = await readFile(resolve(root, "android/terminal/web/src/terminal.ts"), "utf8");
     const native = await readFile(resolve(root, "android/terminal/src/main/kotlin/io/github/verybigsad/pimobile/terminal/TerminalRuntime.kt"), "utf8");
     const readyReports = [...runtime.matchAll(/report\(\{[^}]*type: "terminal\.ready"[^}]*\}\)/g)].map((match) => match[0]);
-    expect(readyReports).toEqual(['report({ type: "terminal.ready", canaryOk: true })']);
+    expect(readyReports).toEqual([
+      'report({ type: "terminal.ready", canaryOk: true })',
+      'report({ type: "terminal.ready", canaryOk: true })',
+    ]);
     expect(runtime).toContain("canaryPassed = true");
     expect(runtime).toContain("if (!canaryPassed) break;");
     expect(runtime).toContain("forceCanaryFailure");
@@ -140,7 +172,8 @@ describe("terminal assets", () => {
     expect(native).toContain('optBoolean("canaryOk", false)');
     expect(native).toContain("TERMINAL_READY_WITHOUT_CANARY");
     expect(native).toContain("canaryPassed = result.compatible");
-    expect(native).toContain("$TerminalAssetUrl?forceCanaryFailure=1");
+    expect(runtime).toContain("forceReadyWithoutCanary");
+    expect(native).toContain("forceReadyWithoutCanary");
   });
 
   it("keeps arbitrary terminal bytes with full uint64 generation and sequence", () => {

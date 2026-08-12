@@ -29,9 +29,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
- * Adapter notes (integration gaps):
- * - SessionEntity has no repository/worktree/parent columns (storage v3); repositoryPath and
- *   worktreePath both fall back to `cwd`, parent linkage is unavailable until the schema grows.
+ * Adapter notes:
  * - Model appendOrdinal is a signed Long while the wire append order is uint64; rows above
  *   Long.MAX_VALUE are dropped rather than silently wrapped.
  */
@@ -42,9 +40,9 @@ object StorageMappers {
         id = SessionId(entity.sessionId),
         macId = macId,
         displayName = entity.displayName?.takeIf(String::isNotBlank) ?: entity.sessionId,
-        repositoryPath = entity.cwd,
-        worktreePath = entity.cwd,
-        parentSessionId = null,
+        repositoryPath = entity.repositoryPath,
+        worktreePath = entity.worktreePath,
+        parentSessionId = entity.parentSessionId?.let(::SessionId),
         updatedAtEpochMillis = entity.updatedAtEpochMs,
     )
 

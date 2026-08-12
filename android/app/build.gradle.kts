@@ -10,7 +10,8 @@ plugins {
 val releaseStorePath = providers.environmentVariable("PI_MOBILE_KEYSTORE_PATH").orNull
 val releaseStorePassword = providers.environmentVariable("PI_MOBILE_KEYSTORE_PASSWORD").orNull
 val releaseKeyPassword = providers.environmentVariable("PI_MOBILE_KEY_PASSWORD").orNull
-val hasReleaseSigning = listOf(releaseStorePath, releaseStorePassword, releaseKeyPassword).all { !it.isNullOrBlank() }
+val releaseKeyAlias = providers.environmentVariable("PI_MOBILE_KEY_ALIAS").orNull?.takeIf { it.isNotBlank() } ?: "pimobile-release"
+val hasReleaseSigning = listOf(releaseStorePath, releaseStorePassword, releaseKeyPassword, releaseKeyAlias).all { !it.isNullOrBlank() }
 
 val appVersion = Properties().apply {
     rootProject.file("gradle/app-version.properties").inputStream().use { load(it) }
@@ -39,7 +40,7 @@ android {
             create("release") {
                 storeFile = file(requireNotNull(releaseStorePath))
                 storePassword = releaseStorePassword
-                keyAlias = "pimobile-release"
+                keyAlias = releaseKeyAlias
                 keyPassword = releaseKeyPassword
                 storeType = "PKCS12"
                 enableV1Signing = false
@@ -123,6 +124,7 @@ dependencies {
     testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.test.ext)
     androidTestImplementation(libs.espresso.core)
+    androidTestImplementation(libs.espresso.web)
     androidTestImplementation(libs.androidx.work.testing)
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.compose.test.junit4)

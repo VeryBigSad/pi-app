@@ -22,8 +22,10 @@ import io.github.verybigsad.pimobile.security.PairedProfile
 import io.github.verybigsad.pimobile.security.ProfileStore
 import io.github.verybigsad.pimobile.session.ApprovalDecision
 import io.github.verybigsad.pimobile.session.ApprovalOfferUiState
+import io.github.verybigsad.pimobile.session.CommandNoticeUiState
 import io.github.verybigsad.pimobile.session.SessionDetailEvent
 import io.github.verybigsad.pimobile.session.SessionListEvent
+import io.github.verybigsad.pimobile.session.VoicePermissionUiState
 import io.github.verybigsad.pimobile.storage.CanonicalResyncSignal
 import io.github.verybigsad.pimobile.storage.DraftEntity
 import io.github.verybigsad.pimobile.storage.StoredTrustStatus
@@ -71,13 +73,19 @@ sealed interface AppIntent {
     data class OpenTerminal(val sessionId: SessionId) : AppIntent
     data object CloseTerminal : AppIntent
     data object VoiceStop : AppIntent
+    data class VoicePermissionResult(
+        val requestId: Long,
+        val granted: Boolean,
+        val permanentlyDenied: Boolean,
+    ) : AppIntent
+    data class VoicePermissionCancelled(val requestId: Long) : AppIntent
     data object OpenSettings : AppIntent
     data object CloseSettings : AppIntent
     data object OpenAgents : AppIntent
     data object CloseAgents : AppIntent
     data object OpenUpdateSheet : AppIntent
     data object CloseUpdateSheet : AppIntent
-    data class VoiceTranscriptReceived(val transcript: VoiceTranscript) : AppIntent
+    data class VoiceTranscriptReceived(val targetSessionId: SessionId, val transcript: VoiceTranscript) : AppIntent
     data class PasskeyAvailabilityChanged(val availability: AppPasskeyAvailability) : AppIntent
 }
 
@@ -88,7 +96,7 @@ interface PasskeyBridgePort {
 
 interface VoicePort {
     suspend fun setForeground(foreground: Boolean)
-    suspend fun start(): String?
+    suspend fun start(targetSessionId: SessionId): String?
     suspend fun stop()
     suspend fun cancel()
     suspend fun onMacError(sessionId: String, error: io.github.verybigsad.pimobile.voice.MacVoiceError)
@@ -108,6 +116,17 @@ interface WakeNotificationPort {
 
 interface PushDrainPort {
     suspend fun drain(connector: HostConnector)
+}
+
+/** Removes local push delivery state when its owning Mac trust boundary is destroyed. */
+interface UnpairPort {
+    suspend fun unregister()
+
+    companion object {
+        val NOOP: UnpairPort = object : UnpairPort {
+            override suspend fun unregister() = Unit
+        }
+    }
 }
 
 /** Receives parsed agents host events; app composes an AgentsStore behind it. */
@@ -131,6 +150,13 @@ interface AgentsEventSink {
  * follows decode -> pure reducer -> Room transaction -> publish -> acknowledge; a storage
  * failure closes the generation instead of acknowledging.
  */
+private data class PendingCommand(
+    val sessionId: SessionId,
+    val generation: Long,
+    val draftRevision: Long,
+    val clearsDraft: Boolean,
+)
+
 class PiAppCoordinator(
     scope: CoroutineScope,
     private val cache: CachePort,
@@ -145,6 +171,7 @@ class PiAppCoordinator(
     private val passkeyAvailability: () -> AppPasskeyAvailability,
     private val pendingResyncSignal: () -> CanonicalResyncSignal?,
     private val clock: AppClock,
+    private val unpairPort: UnpairPort = UnpairPort.NOOP,
     private val agentsSink: AgentsEventSink = AgentsEventSink.NOOP,
     private val backgroundLockMillis: Long = 5 * 60 * 1_000L,
     private val passkeySessionMillis: Long = 12 * 60 * 60 * 1_000L,
@@ -158,6 +185,7 @@ class PiAppCoordinator(
 
     private var foreground = false
     private var connectionGeneration = 0L
+    private var voicePermissionRequestId = 0L
     private var pairingGeneration = 0L
     private var connector: HostConnector? = null
     private var connectionJob: Job? = null
@@ -170,6 +198,7 @@ class PiAppCoordinator(
     private var resyncSignal: CanonicalResyncSignal? = null
     private var pairingDeviceId: String? = null
     private val loadingOlder = mutableSetOf<SessionId>()
+    private val pendingCommands = mutableMapOf<String, PendingCommand>()
 
     fun submit(intent: AppIntent) {
         intents.trySend(intent)
@@ -213,7 +242,9 @@ class PiAppCoordinator(
             is AppIntent.DetailEvent -> onDetailEvent(intent.sessionId, intent.event)
             is AppIntent.DeepLink -> onDeepLink(intent.sessionId)
             AppIntent.WakeReceived -> onWake()
-            AppIntent.NavigateBack -> update { it.copy(selectedSessionId = null, terminalSessionId = null) }
+            AppIntent.NavigateBack -> update {
+                it.copy(selectedSessionId = null, terminalSessionId = null, voicePermissionRequest = null)
+            }
             is AppIntent.OpenTerminal -> update { it.copy(terminalSessionId = intent.sessionId) }
             AppIntent.CloseTerminal -> {
                 terminalPort()?.close()
@@ -221,13 +252,15 @@ class PiAppCoordinator(
             }
 
             AppIntent.VoiceStop -> voicePort.stop()
+            is AppIntent.VoicePermissionResult -> onVoicePermissionResult(intent)
+            is AppIntent.VoicePermissionCancelled -> cancelVoicePermissionRequest(intent.requestId)
             AppIntent.OpenSettings -> update { it.copy(settingsOpen = true) }
             AppIntent.CloseSettings -> update { it.copy(settingsOpen = false) }
             AppIntent.OpenAgents -> update { it.copy(agentsOpen = true) }
             AppIntent.CloseAgents -> update { it.copy(agentsOpen = false) }
             AppIntent.OpenUpdateSheet -> update { it.copy(updateSheetOpen = true) }
             AppIntent.CloseUpdateSheet -> update { it.copy(updateSheetOpen = false) }
-            is AppIntent.VoiceTranscriptReceived -> onVoiceTranscript(intent.transcript)
+            is AppIntent.VoiceTranscriptReceived -> onVoiceTranscript(intent.targetSessionId, intent.transcript)
             is AppIntent.PasskeyAvailabilityChanged -> update { it.copy(passkeyProvider = intent.availability) }
         }
     }
@@ -394,10 +427,8 @@ class PiAppCoordinator(
             is HostConnectionEvent.SyncReset -> onSyncReset(event.sessionId, event.reason, now)
             is HostConnectionEvent.SnapshotReady -> onSnapshot(event, now)
             is HostConnectionEvent.SnapshotRejected -> {
-                // No commit: the local cursor stays behind so the next sync.resume re-snapshots.
-                // The ack is still required; the host blocks the remaining sync queue on it.
-                acknowledge(event.sessionId, event.cursor)
-                update { it.copy(lastError = "SNAPSHOT_ENTRY_INVALID") }
+                update { it.copy(lastError = "SNAPSHOT_REJECTED") }
+                closeGeneration()
             }
             is HostConnectionEvent.CanonicalEvent -> onCanonicalEvent(event, now)
             HostConnectionEvent.SyncComplete -> onSyncComplete()
@@ -420,6 +451,7 @@ class PiAppCoordinator(
             }
 
             is HostConnectionEvent.ApprovalExpired -> update { it.copy(approval = null) }
+            is HostConnectionEvent.CommandStatus -> onCommandStatus(event)
             is HostConnectionEvent.VoiceTranscript -> Unit
             is HostConnectionEvent.VoiceError -> voicePort.onMacError(event.streamId, event.error)
             is HostConnectionEvent.TerminalReady -> terminalPort()?.onReady(event.terminalGeneration, event.columns, event.rows)
@@ -427,17 +459,13 @@ class PiAppCoordinator(
             HostConnectionEvent.TerminalReset -> terminalPort()?.onReset()
             is HostConnectionEvent.TerminalHistoryResult -> terminalPort()?.onHistoryResult(event)
             is HostConnectionEvent.AgentsCatalogReceived -> agentsSink.onCatalog(event.catalog)
-            is HostConnectionEvent.SessionCatalogReceived -> applyCatalog(
-                event.catalog.sessions.associate { entry ->
-                    SessionId(entry.id.value) to SessionCatalogEntry(
-                        provider = entry.provider,
-                        modelName = entry.model,
-                        thinkingLevel = entry.thinkingLevel,
-                    )
-                },
-            )
+            is HostConnectionEvent.SessionCatalogReceived -> onSessionCatalog(event.catalog, now)
             is HostConnectionEvent.AgentsUpdateReceived -> agentsSink.onUpdate(event.update)
-            is HostConnectionEvent.HostError -> update { it.copy(lastError = event.code) }
+            is HostConnectionEvent.SessionSettledReceived -> Unit
+            is HostConnectionEvent.HostError -> {
+                update { it.copy(lastError = event.code) }
+                if (!event.retryable) closeGeneration()
+            }
             is HostConnectionEvent.Disconnected -> onDisconnected(event.reason, now)
         }
     }
@@ -458,7 +486,8 @@ class PiAppCoordinator(
 
     private suspend fun onSnapshot(event: HostConnectionEvent.SnapshotReady, now: Long) {
         val existing = mutableState.value.sessions[event.sessionId]
-        val metadata = StorageMappers.sessionMetadata(event.session, (mutableState.value.trust as? TrustState.Trusted)?.macId ?: MacId("unknown"))
+        val persistedSession = snapshotSession(event, now)
+        val metadata = StorageMappers.sessionMetadata(persistedSession, (mutableState.value.trust as? TrustState.Trusted)?.macId ?: MacId("unknown"))
         val base = existing ?: SessionState.initial(metadata).let { initial ->
             val trusted = SessionReducer.reduce(initial, SessionAction.TrustChanged(mutableState.value.trust), now)
             SessionReducer.reduce(trusted, SessionAction.ConnectionChanged(mutableState.value.connection), now)
@@ -467,7 +496,7 @@ class PiAppCoordinator(
             sessionId = event.sessionId,
             cursor = event.cursor,
             finalizedMessages = event.messages.mapNotNull(StorageMappers::finalizedMessage).toPersistentList(),
-            lastAppendId = null,
+            lastAppendId = event.lastAppendId?.let { io.github.verybigsad.pimobile.model.AppendId(it) },
             runState = io.github.verybigsad.pimobile.model.SessionRunState.IDLE,
             hasOlderMessages = false,
         )
@@ -476,43 +505,91 @@ class PiAppCoordinator(
             SessionAction.Conversation(ConversationAction.SnapshotCommitted(snapshot)),
             now,
         )
-        updateSession(next)
         runCatching {
-            cache.replaceSessionSnapshot(event.session, event.messages)
+            cache.replaceSessionSnapshot(persistedSession, event.messages)
         }.onSuccess {
-            acknowledge(event.sessionId, event.cursor)
-            maybeAcknowledgeResync()
+            updateSession(next)
+            if (acknowledge(event.sessionId, event.cursor)) maybeAcknowledgeResync()
         }.onFailure {
             closeGeneration()
         }
     }
 
     private suspend fun onCanonicalEvent(event: HostConnectionEvent.CanonicalEvent, now: Long) {
-        val state = mutableState.value.sessions[event.sessionId] ?: return
-        if (event.conversationEvent == null) return
+        val state = mutableState.value.sessions[event.sessionId] ?: run {
+            if (event.acknowledgeSyncFence) closeGeneration()
+            return
+        }
+        val action = event.conversationEvent?.let(ConversationAction::EventReceived)
+            ?: ConversationAction.CursorAdvanced(event.cursor)
         val next = SessionReducer.reduce(
             state,
-            SessionAction.Conversation(ConversationAction.EventReceived(event.conversationEvent)),
+            SessionAction.Conversation(action),
             now,
         )
         if (next.conversation.availability is CanonicalAvailability.Unavailable &&
             state.conversation.availability is CanonicalAvailability.Current
         ) {
             updateSession(next)
+            if (mutableState.value.syncing) closeGeneration()
             return
         }
-        updateSession(next)
-        if (event.finalized != null) {
+        val cursorAdvanced = next.conversation.cursor != state.conversation.cursor
+        if (cursorAdvanced) {
             runCatching {
-                cache.commitFinalizedMessage(sessionEntityFor(next, now), event.finalized)
+                cache.commitCanonicalEvent(sessionEntityFor(next, now), event.finalized)
             }.onFailure {
                 closeGeneration()
                 return
             }
         }
-        if (mutableState.value.syncing) {
+        updateSession(next)
+        if (mutableState.value.syncing && event.acknowledgeSyncFence) {
             acknowledge(event.sessionId, event.cursor)
         }
+    }
+
+    private suspend fun onSessionCatalog(
+        catalog: io.github.verybigsad.pimobile.network.WireBodies.SessionCatalog,
+        now: Long,
+    ) {
+        val current = mutableState.value
+        val macId = (current.trust as? TrustState.Trusted)?.macId ?: MacId("unknown")
+        val sessions = catalog.sessions.associate { entry ->
+            val existing = current.sessions[entry.id]
+            val displayName = existing?.metadata?.displayName
+                ?: entry.workingDirectory.trimEnd('/').substringAfterLast('/').ifBlank { entry.id.value }
+            val metadata = io.github.verybigsad.pimobile.model.SessionMetadata(
+                id = entry.id,
+                macId = macId,
+                displayName = displayName,
+                repositoryPath = entry.repositoryPath,
+                worktreePath = entry.worktreePath ?: entry.workingDirectory,
+                parentSessionId = entry.parentSessionId,
+                updatedAtEpochMillis = entry.updatedAtEpochMillis,
+            )
+            val session = if (existing === null) {
+                val initial = SessionState.initial(metadata)
+                val trusted = SessionReducer.reduce(initial, SessionAction.TrustChanged(current.trust), now)
+                SessionReducer.reduce(trusted, SessionAction.ConnectionChanged(current.connection), now)
+            } else {
+                SessionReducer.reduce(existing, SessionAction.MetadataChanged(metadata), now)
+            }
+            entry.id to session
+        }.toPersistentMap()
+        val displayCatalog = catalog.sessions.associate { entry ->
+            entry.id to SessionCatalogEntry(
+                provider = entry.provider,
+                modelName = entry.model,
+                thinkingLevel = entry.thinkingLevel,
+            )
+        }
+        update { it.copy(catalog = displayCatalog, sessions = sessions) }
+        runCatching {
+            sessions.values.forEach { session ->
+                cache.upsertSession(sessionEntityFor(session, session.metadata.updatedAtEpochMillis))
+            }
+        }.onFailure { closeGeneration() }
     }
 
     private suspend fun onSyncComplete() {
@@ -537,8 +614,20 @@ class PiAppCoordinator(
         }
     }
 
-    private suspend fun acknowledge(sessionId: SessionId, cursor: EventCursor) {
-        runCatching { connector?.send("event.ack", WireMessages.eventAck(sessionId, cursor)) }
+    private suspend fun acknowledge(sessionId: SessionId, cursor: EventCursor): Boolean {
+        val host = connector ?: run {
+            closeGeneration()
+            return false
+        }
+        return runCatching {
+            host.send("event.ack", WireMessages.eventAck(sessionId, cursor))
+        }.fold(
+            onSuccess = { true },
+            onFailure = {
+                closeGeneration()
+                false
+            },
+        )
     }
 
     private suspend fun sendSyncResume() {
@@ -549,6 +638,7 @@ class PiAppCoordinator(
     }
 
     private suspend fun onDisconnected(reason: String?, now: Long) {
+        markPendingCommandsIndeterminate(connectionGeneration)
         connector = null
         stopLease()
         agentsSink.onOffline(true)
@@ -568,6 +658,7 @@ class PiAppCoordinator(
     }
 
     private suspend fun closeGeneration() {
+        markPendingCommandsIndeterminate(connectionGeneration)
         connectionGeneration += 1
         runCatching { connector?.close() }
         connector = null
@@ -628,14 +719,32 @@ class PiAppCoordinator(
     }
 
     private suspend fun onPairingCompleted(profile: PairedProfile) {
-        profiles.save(profile)
+        val previous = profiles.load()
+        if (previous != null && previous.macId != profile.macId) {
+            val now = clock.nowEpochMillis()
+            val purged = runCatching {
+                cache.revokeAndPurge(previous.macId, now, "REPLACED_BY_NEW_MAC")
+                profiles.delete()
+                unpairPort.unregister()
+            }.isSuccess
+            if (!purged) {
+                update { it.copy(pairing = PairingUiState.Failed("PAIRING_PREVIOUS_TRUST_PURGE_FAILED")) }
+                return
+            }
+        }
         val trust = TrustState.Trusted(
             macId = MacId(profile.macId),
             macDisplayName = profile.macDisplayName,
             certificateSerial = profile.certificateSerial,
             certificateNotAfterEpochMillis = profile.certificateNotAfterEpochMillis,
         )
-        persistTrust(trust)
+        runCatching {
+            persistTrust(trust)
+            profiles.save(profile)
+        }.onFailure {
+            update { it.copy(pairing = PairingUiState.Failed("PAIRING_TRUST_PERSIST_FAILED")) }
+            return
+        }
         update { it.copy(pairing = null, pendingDeepLinkSessionId = null) }
         applyTrust(trust, clock.nowEpochMillis())
         connect()
@@ -649,15 +758,41 @@ class PiAppCoordinator(
     private suspend fun unpair() {
         pairingGeneration += 1
         closeGenerationNoReconnect()
-        profiles.delete()
+        val trusted = mutableState.value.trust as? TrustState.Trusted ?: return
+        val now = clock.nowEpochMillis()
+        val revoked = TrustState.Revoked(trusted.macId, now, "USER_UNPAIRED")
+        if (runCatching {
+                cache.revokeAndPurge(trusted.macId.value, now, "USER_UNPAIRED")
+            }.isFailure
+        ) {
+            update { it.copy(lastError = "UNPAIR_STORAGE_FAILED") }
+            return
+        }
+        if (runCatching { profiles.delete() }.isFailure) {
+            applyTrust(revoked, now)
+            update {
+                it.copy(
+                    sessions = persistentMapOf(),
+                    authentication = null,
+                    pairing = null,
+                    selectedSessionId = null,
+                    terminalSessionId = null,
+                    lastError = "UNPAIR_PROFILE_DELETE_FAILED",
+                )
+            }
+            return
+        }
+        runCatching { unpairPort.unregister() }
         update {
             it.copy(
                 trust = TrustState.Unpaired,
                 sessions = persistentMapOf(),
+                catalog = null,
                 authentication = null,
                 pairing = null,
                 selectedSessionId = null,
                 terminalSessionId = null,
+                pendingDeepLinkSessionId = null,
             )
         }
     }
@@ -732,6 +867,7 @@ class PiAppCoordinator(
             lockJob = null
             if (mutableState.value.connection is ConnectionState.Ready) startLease()
         } else {
+            update { it.copy(voicePermissionRequest = null) }
             stopLease()
             lockJob?.cancel()
             lockJob = scope.launch {
@@ -742,6 +878,7 @@ class PiAppCoordinator(
     }
 
     private suspend fun lock(reason: LockReason) {
+        markPendingCommandsIndeterminate(connectionGeneration)
         lockJob?.cancel()
         lockJob = null
         val hadAuthentication = mutableState.value.authentication != null
@@ -778,8 +915,12 @@ class PiAppCoordinator(
 
     private suspend fun onListEvent(event: SessionListEvent) {
         when (event) {
-            is SessionListEvent.OpenSession -> update { it.copy(selectedSessionId = event.sessionId) }
-            is SessionListEvent.OpenSessionActions -> update { it.copy(selectedSessionId = event.sessionId) }
+            is SessionListEvent.OpenSession -> update {
+                it.copy(selectedSessionId = event.sessionId, voicePermissionRequest = null)
+            }
+            is SessionListEvent.OpenSessionActions -> update {
+                it.copy(selectedSessionId = event.sessionId, voicePermissionRequest = null)
+            }
             SessionListEvent.PairMac -> handle(AppIntent.StartPairing)
             SessionListEvent.Authenticate -> authenticate()
             SessionListEvent.RetryConnection -> reconnectNow()
@@ -794,7 +935,9 @@ class PiAppCoordinator(
         val state = mutableState.value.sessions[sessionId] ?: return
         val now = clock.nowEpochMillis()
         when (event) {
-            SessionDetailEvent.NavigateBack -> update { it.copy(selectedSessionId = null) }
+            SessionDetailEvent.NavigateBack -> update {
+                it.copy(selectedSessionId = null, voicePermissionRequest = null)
+            }
             SessionDetailEvent.PairMac -> handle(AppIntent.StartPairing)
             SessionDetailEvent.Authenticate -> authenticate()
             SessionDetailEvent.RetryConnection -> reconnectNow()
@@ -829,9 +972,8 @@ class PiAppCoordinator(
             SessionDetailEvent.QueueFollowUp -> sendCommand(state, "follow_up")
             SessionDetailEvent.Stop -> sendCommand(state, "abort")
             SessionDetailEvent.Attach -> Unit
-            SessionDetailEvent.StartVoice -> voicePort.start()?.let { code ->
-                update { it.copy(lastError = code) }
-            }
+            SessionDetailEvent.StartVoice -> startVoice(sessionId, permissionRetry = false)
+            SessionDetailEvent.OpenVoicePermissionSettings -> Unit
 
             SessionDetailEvent.LoadOlder -> loadOlder(state)
             SessionDetailEvent.RetryApprovalService -> reconnectNow()
@@ -857,6 +999,70 @@ class PiAppCoordinator(
                 update { it.copy(approval = null) }
             }
         }
+    }
+
+    private suspend fun startVoice(sessionId: SessionId, permissionRetry: Boolean) {
+        if (!permissionRetry && mutableState.value.voicePermissionRequest != null) return
+        if (!canStartVoice(sessionId)) return
+        when (val code = voicePort.start(sessionId)) {
+            null -> update {
+                it.copy(voicePermissionNotices = it.voicePermissionNotices - sessionId)
+            }
+
+            "VOICE_PERMISSION_REQUIRED" -> {
+                if (permissionRetry) {
+                    updateVoicePermissionNotice(sessionId, VoicePermissionUiState.PermanentlyDenied)
+                } else {
+                    val request = VoicePermissionRequest(++voicePermissionRequestId, sessionId)
+                    update { it.copy(voicePermissionRequest = request) }
+                }
+            }
+
+            "VOICE_PERMISSION_DENIED" -> updateVoicePermissionNotice(
+                sessionId,
+                VoicePermissionUiState.PermanentlyDenied,
+            )
+
+            else -> update { it.copy(lastError = code) }
+        }
+    }
+
+    private suspend fun onVoicePermissionResult(result: AppIntent.VoicePermissionResult) {
+        val request = mutableState.value.voicePermissionRequest
+        if (request == null || request.requestId != result.requestId) return
+        update { it.copy(voicePermissionRequest = null) }
+        if (!result.granted) {
+            updateVoicePermissionNotice(
+                request.targetSessionId,
+                if (result.permanentlyDenied) {
+                    VoicePermissionUiState.PermanentlyDenied
+                } else {
+                    VoicePermissionUiState.Denied
+                },
+            )
+            return
+        }
+        startVoice(request.targetSessionId, permissionRetry = true)
+    }
+
+    private suspend fun cancelVoicePermissionRequest(requestId: Long) {
+        if (mutableState.value.voicePermissionRequest?.requestId == requestId) {
+            update { it.copy(voicePermissionRequest = null) }
+        }
+    }
+
+    private suspend fun updateVoicePermissionNotice(sessionId: SessionId, notice: VoicePermissionUiState) {
+        update { state ->
+            state.copy(voicePermissionNotices = state.voicePermissionNotices + (sessionId to notice))
+        }
+    }
+
+    private fun canStartVoice(sessionId: SessionId): Boolean {
+        val state = mutableState.value
+        return foreground &&
+            state.selectedSessionId == sessionId &&
+            state.connection is ConnectionState.Ready &&
+            state.sessions[sessionId]?.conversation?.availability is CanonicalAvailability.Current
     }
 
     private suspend fun mutateDraft(sessionId: SessionId, action: (DraftState) -> DraftAction) {
@@ -925,11 +1131,16 @@ class PiAppCoordinator(
     }
 
     private suspend fun sendCommand(state: SessionState, operation: String) {
-        if (mutableState.value.connection !is ConnectionState.Ready) return
         if (state.conversation.availability !is CanonicalAvailability.Current) return
+        val ready = mutableState.value.connection as? ConnectionState.Ready
+        val host = connector
+        val generation = connectionGeneration
+        if (ready == null || host == null || generation != connectionGeneration || mutableState.value.connection !is ConnectionState.Ready) {
+            setCommandFailure(state.metadata.id, "COMMAND_NOT_SENT")
+            return
+        }
         val text = state.draft.typedText
         if (operation != "abort" && text.isBlank()) return
-        // Pi RPC prompt body field is `message` (docs/protocol-v1.md command.submit contract).
         val payload = buildJsonObject { put("message", text) }
         val hash = io.github.verybigsad.pimobile.protocol.commandPayloadHash(
             state.metadata.id.value,
@@ -937,35 +1148,77 @@ class PiAppCoordinator(
             payload,
         )
         val commandId = UUID.randomUUID().toString()
-        runCatching {
-            connector?.send(
+        setCommandNotice(state.metadata.id, CommandNoticeUiState.Sending)
+        val sent = runCatching {
+            host.send(
                 "command.submit",
                 WireMessages.commandSubmit(commandId, state.metadata.id, operation, payload, hash),
             )
-        }.onSuccess {
-            if (operation != "abort") {
-                mutateDraft(state) { DraftAction.Clear(it.revision, clock.nowEpochMillis()) }
+        }.isSuccess
+        if (!sent || generation != connectionGeneration || connector !== host || mutableState.value.connection !is ConnectionState.Ready) {
+            setCommandFailure(state.metadata.id, "COMMAND_SEND_FAILED")
+            return
+        }
+        pendingCommands[commandId] = PendingCommand(
+            sessionId = state.metadata.id,
+            generation = generation,
+            draftRevision = state.draft.revision,
+            clearsDraft = operation != "abort",
+        )
+        setCommandNotice(state.metadata.id, CommandNoticeUiState.AwaitingHost)
+    }
+
+    private suspend fun onCommandStatus(event: HostConnectionEvent.CommandStatus) {
+        val pending = pendingCommands[event.commandId] ?: return
+        when (event.state) {
+            "RECEIVED", "ARMED" -> setCommandNotice(pending.sessionId, CommandNoticeUiState.AwaitingHost)
+            "ACKED" -> {
+                pendingCommands.remove(event.commandId)
+                if (pending.clearsDraft) clearAcknowledgedDraft(pending)
+                setCommandNotice(pending.sessionId, CommandNoticeUiState.Acknowledged)
             }
-        }.onFailure {
-            update { it.copy(lastError = "COMMAND_SEND_FAILED") }
+            "REJECTED" -> {
+                pendingCommands.remove(event.commandId)
+                setCommandFailure(pending.sessionId, event.errorCode ?: "COMMAND_REJECTED")
+            }
+            "INDETERMINATE" -> {
+                pendingCommands.remove(event.commandId)
+                setCommandFailure(pending.sessionId, event.errorCode ?: "COMMAND_INDETERMINATE")
+            }
         }
     }
 
-    private fun onVoiceTranscript(transcript: VoiceTranscript) {
-        val sessionId = mutableState.value.selectedSessionId ?: return
-        scope.launch {
-            when (transcript.kind) {
-                VoiceTranscriptKind.PARTIAL -> mutateDraft(sessionId) {
-                    DraftAction.ReplaceTranscription(transcript.text, it.revision, clock.nowEpochMillis())
-                }
+    private suspend fun clearAcknowledgedDraft(pending: PendingCommand) {
+        val session = mutableState.value.sessions[pending.sessionId] ?: return
+        if (session.draft.revision != pending.draftRevision) return
+        mutateDraft(session) { DraftAction.Clear(it.revision, clock.nowEpochMillis()) }
+    }
 
-                VoiceTranscriptKind.FINAL -> mutateDraft(sessionId) {
-                    DraftAction.ReplaceTypedText(
-                        (it.typedText + if (it.typedText.isBlank()) transcript.text else " ${transcript.text}"),
-                        it.revision,
-                        clock.nowEpochMillis(),
-                    )
-                }
+    private fun markPendingCommandsIndeterminate(generation: Long) {
+        val affected = pendingCommands.filterValues { it.generation == generation }
+        affected.forEach { (commandId, pending) ->
+            pendingCommands.remove(commandId)
+            setCommandFailure(pending.sessionId, "COMMAND_INDETERMINATE")
+        }
+    }
+
+    private fun setCommandFailure(sessionId: SessionId, code: String) {
+        setCommandNotice(sessionId, CommandNoticeUiState.Failed(code, retryable = true))
+        update { it.copy(lastError = code) }
+    }
+
+    private fun setCommandNotice(sessionId: SessionId, notice: CommandNoticeUiState) {
+        update { it.copy(commandNotices = it.commandNotices + (sessionId to notice)) }
+    }
+
+    private suspend fun onVoiceTranscript(targetSessionId: SessionId, transcript: VoiceTranscript) {
+        when (transcript.kind) {
+            VoiceTranscriptKind.PARTIAL -> mutateDraft(targetSessionId) {
+                DraftAction.ReplaceTranscription(transcript.text, it.revision, clock.nowEpochMillis())
+            }
+
+            VoiceTranscriptKind.FINAL -> mutateDraft(targetSessionId) {
+                DraftAction.ReplaceTranscription(transcript.text, it.revision, clock.nowEpochMillis())
             }
         }
     }
@@ -1002,17 +1255,45 @@ class PiAppCoordinator(
         }
     }
 
-    private fun sessionEntityFor(session: SessionState, now: Long): io.github.verybigsad.pimobile.storage.SessionEntity =
-        io.github.verybigsad.pimobile.storage.SessionEntity(
-            sessionId = session.metadata.id.value,
-            cwd = session.metadata.repositoryPath,
-            displayName = session.metadata.displayName,
-            provider = "unknown",
-            modelId = "unknown",
-            thinkingLevel = "unknown",
-            canonicalCursor = session.conversation.cursor?.let(StorageMappers::cursor),
+    private suspend fun snapshotSession(
+        event: HostConnectionEvent.SnapshotReady,
+        now: Long,
+    ): io.github.verybigsad.pimobile.storage.SessionEntity {
+        val stored = cache.loadSession(event.sessionId.value)
+        val stateMetadata = mutableState.value.sessions[event.sessionId]?.metadata
+        val catalog = mutableState.value.catalog?.get(event.sessionId)
+        return event.session.copy(
+            cwd = event.session.cwd.takeUnless { it == "/" } ?: stored?.cwd ?: stateMetadata?.worktreePath ?: "/",
+            displayName = event.session.displayName ?: stored?.displayName,
+            provider = catalog?.provider ?: stored?.provider ?: event.session.provider,
+            modelId = catalog?.modelName ?: stored?.modelId ?: event.session.modelId,
+            thinkingLevel = catalog?.thinkingLevel ?: stored?.thinkingLevel ?: event.session.thinkingLevel,
             updatedAtEpochMs = now,
+            repositoryPath = stateMetadata?.repositoryPath ?: stored?.repositoryPath ?: event.session.repositoryPath,
+            worktreePath = stateMetadata?.worktreePath ?: stored?.worktreePath ?: event.session.worktreePath,
+            parentSessionId = stateMetadata?.parentSessionId?.value ?: stored?.parentSessionId ?: event.session.parentSessionId,
         )
+    }
+
+    private suspend fun sessionEntityFor(session: SessionState, now: Long): io.github.verybigsad.pimobile.storage.SessionEntity {
+        val stored = cache.loadSession(session.metadata.id.value)
+        val catalog = mutableState.value.catalog?.get(session.metadata.id)
+        return io.github.verybigsad.pimobile.storage.SessionEntity(
+            sessionId = session.metadata.id.value,
+            cwd = session.metadata.worktreePath,
+            displayName = session.metadata.displayName,
+            provider = catalog?.provider ?: stored?.provider ?: "unknown",
+            modelId = catalog?.modelName ?: stored?.modelId ?: "unknown",
+            thinkingLevel = catalog?.thinkingLevel ?: stored?.thinkingLevel ?: "unknown",
+            canonicalCursor = session.conversation.cursor?.let { cursor ->
+                StorageMappers.cursor(cursor).copy(lastAppendId = session.conversation.lastAppendId?.value)
+            },
+            updatedAtEpochMs = now,
+            repositoryPath = session.metadata.repositoryPath,
+            worktreePath = session.metadata.worktreePath,
+            parentSessionId = session.metadata.parentSessionId?.value,
+        )
+    }
 
     private suspend fun closeGenerationNoReconnect() {
         connectionGeneration += 1

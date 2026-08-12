@@ -35,7 +35,7 @@ interface HostStoreState {
     endpointId: string;
     distributor: string;
     endpoint: string;
-    wakePublicKey: string;
+    wakePublicKey?: string;
   };
 }
 
@@ -256,7 +256,7 @@ function parseState(raw: Buffer): HostStoreState {
       endpointId: requireString(push["endpointId"], "endpointId"),
       distributor: requireString(push["distributor"], "distributor"),
       endpoint: requireString(push["endpoint"], "endpoint"),
-      wakePublicKey: requireString(push["wakePublicKey"], "wakePublicKey"),
+      ...(typeof push["wakePublicKey"] === "string" ? { wakePublicKey: push["wakePublicKey"] } : {}),
     });
   }
   return {
@@ -274,7 +274,7 @@ function parseState(raw: Buffer): HostStoreState {
             endpointId: push["endpointId"] as string,
             distributor: push["distributor"] as string,
             endpoint: push["endpoint"] as string,
-            wakePublicKey: push["wakePublicKey"] as string,
+            ...(typeof push["wakePublicKey"] === "string" ? { wakePublicKey: push["wakePublicKey"] } : {}),
           },
         }
       : {}),
@@ -336,7 +336,7 @@ function validateDevice(device: PairedDevice): void {
   }
 }
 
-function validatePushEndpoint(endpoint: { deviceId: string; endpointId: string; distributor: string; endpoint: string; wakePublicKey: string }): void {
+function validatePushEndpoint(endpoint: { deviceId: string; endpointId: string; distributor: string; endpoint: string; wakePublicKey?: string }): void {
   let url: URL;
   try {
     url = new URL(endpoint.endpoint);
@@ -350,7 +350,7 @@ function validatePushEndpoint(endpoint: { deviceId: string; endpointId: string; 
     || endpoint.distributor.length > 128
     || url.protocol !== "https:"
     || endpoint.endpoint.length > 4096
-    || !BASE64URL.test(endpoint.wakePublicKey)
+    || (endpoint.wakePublicKey !== undefined && !BASE64URL.test(endpoint.wakePublicKey))
   ) {
     throw new SecurityError("SECURITY_INVALID_INPUT", "push endpoint record is invalid");
   }

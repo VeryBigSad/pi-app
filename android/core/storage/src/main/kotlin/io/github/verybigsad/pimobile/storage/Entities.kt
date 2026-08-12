@@ -117,10 +117,16 @@ data class SessionEntity(
     val thinkingLevel: String,
     @Embedded(prefix = "canonical_") val canonicalCursor: CanonicalAppendCursor?,
     val updatedAtEpochMs: Long,
+    val repositoryPath: String = cwd,
+    val worktreePath: String = cwd,
+    val parentSessionId: String? = null,
 ) {
     init {
         require(sessionId.isNotBlank())
         require(cwd.isNotBlank())
+        require(repositoryPath.isNotBlank())
+        require(worktreePath.isNotBlank())
+        require(parentSessionId != sessionId)
         require(provider.isNotBlank())
         require(modelId.isNotBlank())
         require(thinkingLevel.isNotBlank())

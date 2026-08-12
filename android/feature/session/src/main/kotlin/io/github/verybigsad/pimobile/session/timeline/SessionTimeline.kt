@@ -122,7 +122,7 @@ internal fun SessionTimeline(
             (newestIndex - lastVisible).coerceAtLeast(0)
         }
     }
-    LaunchedEffect(rows.size) {
+    LaunchedEffect(rows, newestIndex) {
         withFrameNanos { }
         val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
         if (lastVisible >= listState.layoutInfo.totalItemsCount - 2) {

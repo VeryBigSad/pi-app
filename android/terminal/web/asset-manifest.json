@@ -13,8 +13,8 @@
     }
   },
   "files": {
-    "terminal.js": "beb7a93fdfef01be1f441e41947baf0c0d7567a01d99dfc24444d61c8f763fee",
-    "index.html": "b4eff97f32c979588bbde71c01ad76eac5e6742d2bee3f26c0c9e14dda453b00",
+    "terminal.js": "7a50d68cfaf5397ecec988f711a09cd8f65a7bcc18110ca0bcecb6bdcbe80983",
+    "index.html": "3478ff2d684dc4b663c74e8e91700efd8f6d16493cfa8e23f2dcb9e31d36f900",
     "terminal-shell.css": "0acccf618eeaf65182ade411a823cce1245a092ba08a88ee84078e16d6f4779a",
     "xterm.css": "4d9a1d50808997f097ccc6040a5da6f6cb06b14e5ee2402df5196a218bba838f",
     "XTERM-LICENSE": "b569f629d00f2626a8100df2a1798210535621e42164dfd426a6fe5aac7b0ccd"

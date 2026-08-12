@@ -26,6 +26,7 @@ import io.github.verybigsad.pimobile.protocol.FrameKind
 import io.github.verybigsad.pimobile.protocol.PimbCodec
 import io.github.verybigsad.pimobile.protocol.StreamPayload
 import io.github.verybigsad.pimobile.protocol.TerminalPayload
+import io.github.verybigsad.pimobile.terminal.TerminalInput
 import io.github.verybigsad.pimobile.security.DeviceKeys
 import io.github.verybigsad.pimobile.security.PairedProfile
 import io.github.verybigsad.pimobile.storage.AuthoritativeFinalMetadata
@@ -45,7 +46,10 @@ import javax.net.ssl.KeyManager
 import javax.net.ssl.TrustManager
 import javax.net.ssl.TrustManagerFactory
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -210,22 +214,35 @@ class PimbHostConnector(
         private val transport: PimbStreamTransport,
         override val path: TransportPath,
     ) : HostConnector {
+        private val terminalInputScope = CoroutineScope(
+            scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]) + Dispatchers.IO,
+        )
+        private val terminalInputActor = TerminalInputActor(terminalInputScope) { frame: TerminalInput ->
+            transport.send(
+                FrameKind.TerminalBytes,
+                PimbCodec.encodeTerminalPayload(
+                    TerminalPayload(frame.terminalGeneration, frame.sequence, frame.bytes),
+                ),
+            )
+        }
+
         override suspend fun send(type: String, body: JsonObject, replyTo: String?) {
             transport.send(FrameKind.Json, WireMessages.encode(type, body, replyTo))
         }
 
+        override fun activateTerminalInput(terminalGeneration: ULong) {
+            terminalInputActor.activate(terminalGeneration)
+        }
+
+        override fun deactivateTerminalInput(terminalGeneration: ULong) {
+            terminalInputActor.deactivate(terminalGeneration)
+        }
+
+        override fun submitTerminalInput(terminalGeneration: ULong, bytes: ByteArray): Deferred<Unit> =
+            terminalInputActor.submit(terminalGeneration, bytes)
+
         override suspend fun sendTerminalInput(terminalGeneration: ULong, sequence: ULong, bytes: ByteArray) {
-            var offset = 0
-            var chunkSequence = sequence
-            while (offset < bytes.size) {
-                val end = minOf(bytes.size, offset + io.github.verybigsad.pimobile.protocol.ProtocolConstants.maxBinaryDataBytes)
-                transport.send(
-                    FrameKind.TerminalBytes,
-                    PimbCodec.encodeTerminalPayload(TerminalPayload(terminalGeneration, chunkSequence, bytes.copyOfRange(offset, end))),
-                )
-                chunkSequence += 1u
-                offset = end
-            }
+            terminalInputActor.submit(terminalGeneration, bytes).await()
         }
 
         override suspend fun sendVoicePcm(streamId: String, sequence: Long, offset: ULong, bytes: ByteArray) {
@@ -235,7 +252,10 @@ class PimbHostConnector(
             )
         }
 
-        override suspend fun close() = transport.close()
+        override suspend fun close() {
+            terminalInputActor.close()
+            transport.close()
+        }
     }
 
     companion object {

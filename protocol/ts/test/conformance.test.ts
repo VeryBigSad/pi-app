@@ -9,6 +9,7 @@ import {
   ProtocolError,
   RecoveryCursor,
   SnapshotAttempt,
+  VoicePcmStream,
   assertApprovalBinding,
   assertPairingBinding,
   assertPairingToken,
@@ -21,6 +22,7 @@ import type { ApprovalBinding, ImageRef, JsonObject, PairingBinding, ProtocolErr
 
 interface Corpus {
   readonly streamOrderCases: readonly StreamCase[];
+  readonly voiceStreamCases: readonly VoiceStreamCase[];
   readonly pairingBindingCases: readonly BindingCase<PairingBinding>[];
   readonly unlockBindingCases: readonly BindingCase<UnlockBinding>[];
   readonly pairingTokenCases: readonly { name: string; pairingToken: string; sessionBinding: string; valid: boolean }[];
@@ -49,7 +51,23 @@ interface StreamChunk {
   readonly streamId: string;
   readonly sequence: number;
   readonly offset: string;
-  readonly dataHex: string;
+  readonly dataHex?: string;
+  readonly dataBytes?: number;
+}
+
+interface VoiceBoundary {
+  readonly streamId: string;
+  readonly chunkSequence: string;
+  readonly final: boolean;
+}
+
+interface VoiceStreamCase {
+  readonly name: string;
+  readonly frames: readonly StreamChunk[];
+  readonly boundaries: readonly VoiceBoundary[];
+  readonly moreFrames: readonly StreamChunk[];
+  readonly finalBoundary?: VoiceBoundary;
+  readonly valid: boolean;
 }
 
 interface BindingCase<T> {
@@ -67,8 +85,14 @@ function expectValidity(valid: boolean, block: () => unknown): void {
   else expect(block).toThrow(ProtocolError);
 }
 
+function bytes(chunk: StreamChunk): Uint8Array {
+  return chunk.dataBytes === undefined
+    ? Uint8Array.from(Buffer.from(chunk.dataHex ?? "", "hex"))
+    : new Uint8Array(chunk.dataBytes);
+}
+
 function accept(stream: ContiguousStream, chunk: StreamChunk): void {
-  stream.accept(chunk.streamId, chunk.sequence, BigInt(chunk.offset), Uint8Array.from(Buffer.from(chunk.dataHex, "hex")));
+  stream.accept(chunk.streamId, chunk.sequence, BigInt(chunk.offset), bytes(chunk));
 }
 
 describe("shared semantic conformance fixtures", () => {
@@ -84,6 +108,19 @@ describe("shared semantic conformance fixtures", () => {
         fixture.chunks.forEach((chunk) => accept(stream, chunk));
         if (fixture.close !== undefined) stream.close(BigInt(fixture.close.length), fixture.close.sha256);
         if (fixture.afterClose !== undefined) accept(stream, fixture.afterClose);
+      });
+    });
+  }
+
+  for (const fixture of corpus.voiceStreamCases) {
+    it(`voice stream: ${fixture.name}`, () => {
+      expectValidity(fixture.valid, () => {
+        const stream = new VoicePcmStream("550e8400-e29b-41d4-a716-446655440001");
+        for (const frame of fixture.frames) stream.accept(frame.streamId, frame.sequence, BigInt(frame.offset), bytes(frame));
+        for (const boundary of fixture.boundaries) stream.boundary(boundary.streamId, boundary.chunkSequence, boundary.final);
+        for (const frame of fixture.moreFrames) stream.accept(frame.streamId, frame.sequence, BigInt(frame.offset), bytes(frame));
+        const boundary = fixture.finalBoundary;
+        if (boundary !== undefined) stream.boundary(boundary.streamId, boundary.chunkSequence, boundary.final);
       });
     });
   }

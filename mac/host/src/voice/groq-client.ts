@@ -1,7 +1,11 @@
 import { homedir } from "node:os";
-import { readFile, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
+import { getuid } from "node:process";
 import { resolve } from "node:path";
 import type { VoiceRateLedger } from "./rate-ledger.js";
+
+const MAX_KEY_BYTES = 4_096;
 
 export type VoiceErrorCode =
   | "VOICE_KEY_UNAVAILABLE"
@@ -132,17 +136,31 @@ async function abortable(operation: Promise<void>, signal: AbortSignal | undefin
 }
 
 async function readKey(path: string): Promise<string> {
-  let metadata;
-  let value;
+  let handle;
   try {
-    [metadata, value] = await Promise.all([stat(path), readFile(path, "utf8")]);
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const metadata = await handle.stat();
+    const ownerUid = getuid?.();
+    if (ownerUid === undefined || !metadata.isFile() || metadata.uid !== ownerUid || (metadata.mode & 0o777) !== 0o600 || metadata.size < 1 || metadata.size > MAX_KEY_BYTES) {
+      throw new VoiceError("VOICE_KEY_PERMISSIONS", "Groq key must be a bounded owner-only regular file");
+    }
+    const bytes = Buffer.allocUnsafe(MAX_KEY_BYTES + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const result = await handle.read(bytes, length, bytes.length - length, null);
+      if (result.bytesRead === 0) break;
+      length += result.bytesRead;
+    }
+    if (length > MAX_KEY_BYTES) throw new VoiceError("VOICE_KEY_UNAVAILABLE", "Groq key is invalid");
+    const key = bytes.subarray(0, length).toString("utf8").trim();
+    if (key.length < 20 || /\s/u.test(key)) throw new VoiceError("VOICE_KEY_UNAVAILABLE", "Groq key is invalid");
+    return key;
   } catch (error) {
+    if (error instanceof VoiceError) throw error;
     throw new VoiceError("VOICE_KEY_UNAVAILABLE", "Groq key is unavailable", undefined, { cause: error });
+  } finally {
+    await handle?.close();
   }
-  if ((metadata.mode & 0o077) !== 0) throw new VoiceError("VOICE_KEY_PERMISSIONS", "Groq key permissions must be 0600 or stricter");
-  const key = value.trim();
-  if (key.length < 20 || /\s/u.test(key)) throw new VoiceError("VOICE_KEY_UNAVAILABLE", "Groq key is invalid");
-  return key;
 }
 
 function multipart(audio: Buffer): FormData {

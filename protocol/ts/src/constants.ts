@@ -60,6 +60,7 @@ export const APPROVAL_PROMOTION_MILLISECONDS = 30_000;
 export const APPROVAL_DECISION_MILLISECONDS = 120_000;
 export const APPROVAL_HOOK_MILLISECONDS = 150_000;
 export const MAX_VOICE_BODY_BYTES = 64 * 1024;
+export const MAX_VOICE_CHUNK_BYTES = 384_000;
 export const MAX_VOICE_TEXT_CHARS = 16_384;
 export const MAX_AGENTS = 256;
 
@@ -112,6 +113,7 @@ export const HARD_BOUNDS = {
   approvalDecisionMilliseconds: APPROVAL_DECISION_MILLISECONDS,
   approvalHookMilliseconds: APPROVAL_HOOK_MILLISECONDS,
   voiceBodyBytes: MAX_VOICE_BODY_BYTES,
+  voiceChunkBytes: MAX_VOICE_CHUNK_BYTES,
   voiceTextChars: MAX_VOICE_TEXT_CHARS,
   maxAgents: MAX_AGENTS,
 } as const;

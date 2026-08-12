@@ -70,6 +70,7 @@
     "approvalDecisionMilliseconds": 120000,
     "approvalHookMilliseconds": 150000,
     "voiceBodyBytes": 65536,
+    "voiceChunkBytes": 384000,
     "voiceTextChars": 16384,
     "maxAgents": 256
   },

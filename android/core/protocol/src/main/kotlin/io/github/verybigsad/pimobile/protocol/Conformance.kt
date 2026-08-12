@@ -7,6 +7,8 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonPrimitive
 
 private val sha256Pattern = Regex("^[0-9a-f]{64}$")
 private val leafPattern = Regex("^[0-9a-f]{8}$")
@@ -343,6 +345,27 @@ private fun assertAgentsCatalogSession(value: JsonElement?) {
     agents.forEach(::assertAgent)
 }
 
+private fun assertCanonicalEvent(value: JsonElement?) {
+    val event = value as? JsonObject ?: protocolViolation("Canonical event must be an object")
+    event.requireUuidV4("sessionId")
+    event.requireUuidV4("streamEpoch")
+    event.requireUint64("sequence")
+    event.requireBoundedString("piType", 128)
+    event.requireUint64("rawSize")
+    val rawSha256 = event["rawSha256"].stringOrNull() ?: protocolViolation("Canonical event requires rawSha256")
+    if (!sha256Pattern.matches(rawSha256)) protocolViolation("Canonical event rawSha256 is invalid")
+    if (event["projection"] !is JsonObject) protocolViolation("Canonical event requires projection")
+    val hasInline = event["rawJson"].stringOrNull() != null
+    val hasReference = event["rawRef"] is JsonObject
+    if (hasInline == hasReference) protocolViolation("Canonical event requires exactly one raw form")
+}
+
+private fun assertCanonicalBatch(body: JsonObject) {
+    val events = body["events"] as? JsonArray ?: protocolViolation("event.batch requires events")
+    if (events.isEmpty() || events.size > 128) protocolViolation("event.batch events exceed bounds")
+    events.forEach(::assertCanonicalEvent)
+}
+
 private fun assertSessionCatalogEntry(value: JsonElement?) {
     val entry = value as? JsonObject ?: protocolViolation("Session catalog entry must be an object")
     entry.requireUuidV4("sessionId")
@@ -384,8 +407,39 @@ fun assertWireMessage(type: String, body: JsonObject) {
         "message.append" -> {
             body.requireUuidV4("sessionId")
             body.requireUuidV4("streamEpoch")
+            body.requireUint64("sequence")
             body.requireUint64("appendId")
+            if (body["piType"].stringOrNull() != "message_end") protocolViolation("message.append requires message_end")
+            if (body["rawJson"].stringOrNull() == null) protocolViolation("message.append requires inline rawJson")
+            body.requireUint64("rawSize")
+            val rawSha256 = body["rawSha256"].stringOrNull() ?: protocolViolation("message.append requires rawSha256")
+            if (!sha256Pattern.matches(rawSha256)) protocolViolation("message.append rawSha256 is invalid")
+            if (body["projection"] !is JsonObject) protocolViolation("message.append requires projection")
             body.requireLeaf("leafId")
+        }
+        "event.batch" -> assertCanonicalBatch(body)
+        "command.state" -> {
+            body.requireUuidV4("commandId")
+            val state = body["state"].stringOrNull() ?: protocolViolation("command.state requires state")
+            if (state !in setOf("RECEIVED", "ARMED", "ACKED", "REJECTED", "INDETERMINATE")) {
+                protocolViolation("command.state state is invalid")
+            }
+            val dormant = (body["dormant"] as? JsonPrimitive)?.booleanOrNull
+                ?: protocolViolation("command.state requires dormant")
+            if (dormant && state != "RECEIVED") protocolViolation("only RECEIVED may be dormant")
+            body["errorCode"]?.let {
+                val code = it.stringOrNull() ?: protocolViolation("command.state errorCode is invalid")
+                if (code.length > 64 || !errorCodePattern.matches(code)) protocolViolation("command.state errorCode is invalid")
+            }
+        }
+        "command.result" -> {
+            body.requireUuidV4("commandId")
+            val state = body["state"].stringOrNull() ?: protocolViolation("command.result requires state")
+            if (state !in setOf("ACKED", "REJECTED", "INDETERMINATE")) protocolViolation("command.result state is invalid")
+            body["errorCode"]?.let {
+                val code = it.stringOrNull() ?: protocolViolation("command.result errorCode is invalid")
+                if (code.length > 64 || !errorCodePattern.matches(code)) protocolViolation("command.result errorCode is invalid")
+            }
         }
         "session.settled" -> {
             body.requireUuidV4("sessionId")
@@ -411,22 +465,33 @@ fun assertWireMessage(type: String, body: JsonObject) {
         "snapshot.begin" -> {
             body.requireUuidV4("sessionId")
             body.requireUuidV4("streamEpoch")
+            body.requireUint64("sequence")
             body.requireUint64("messageCount")
             body.requireUint64OrNull("lastAppendId")
         }
         "snapshot.end" -> {
             body.requireUuidV4("sessionId")
             body.requireUuidV4("streamEpoch")
+            body.requireUint64("sequence")
+            val pages = body["pages"]?.jsonPrimitive?.intOrNull ?: protocolViolation("snapshot.end requires pages")
+            if (pages !in 0..100_000) protocolViolation("snapshot.end pages are invalid")
             body.requireUint64("messageCount")
             body.requireUint64OrNull("lastAppendId")
             if (!body.containsKey("leafId")) protocolViolation("snapshot.end requires leafId")
             body.requireLeaf("leafId")
             if ((body["validated"] as? JsonPrimitive)?.booleanOrNull != true) protocolViolation("snapshot.end requires validated true")
         }
+        "voice.start" -> {
+            body.requireUuidV4("streamId")
+            if (body["sampleRate"]?.jsonPrimitive?.intOrNull != 16_000 || body["channels"]?.jsonPrimitive?.intOrNull != 1 || body["sampleFormat"].stringOrNull() != "s16le") {
+                protocolViolation("voice.start requires 16 kHz mono s16le format")
+            }
+            assertVoiceBody(body)
+        }
         "voice.audio" -> {
             body.requireUuidV4("sessionId")
             body.requireUint64("chunkSequence")
-            if ((body["final"] as? JsonPrimitive)?.booleanOrNull == null) protocolViolation("voice.audio requires a boolean final")
+            if ((body["final"] as? JsonPrimitive)?.booleanOrNull == null || body["audio"] != null) protocolViolation("voice.audio requires a boolean final and no JSON PCM")
             assertVoiceBody(body)
         }
         "voice.partial" -> {
@@ -442,6 +507,25 @@ fun assertWireMessage(type: String, body: JsonObject) {
             assertVoiceText(body["text"])
             assertVoiceBody(body)
         }
+        "voice.cancel" -> {
+            body.requireUuidV4("streamId")
+            body.requireBoundedString("reason", 128)
+            assertVoiceBody(body)
+        }
+        "voice.error" -> {
+            body.requireUuidV4("streamId")
+            val code = body["code"].stringOrNull() ?: protocolViolation("voice.error requires code")
+            if (code.length > 64 || !errorCodePattern.matches(code)) protocolViolation("voice.error code is invalid")
+            val message = body["message"].stringOrNull() ?: protocolViolation("voice.error requires message")
+            if (message.length > 1024) protocolViolation("voice.error message is too long")
+            body["detailCode"]?.let {
+                val detail = it.stringOrNull() ?: protocolViolation("voice.error detailCode is invalid")
+                if (detail.length > 64 || !errorCodePattern.matches(detail)) protocolViolation("voice.error detailCode is invalid")
+            }
+            body["resetAtEpochMilliseconds"]?.let { parseUint64(it.stringOrNull() ?: protocolViolation("voice.error resetAtEpochMilliseconds is invalid")) }
+            body["retryAfterMilliseconds"]?.let { parseUint64(it.stringOrNull() ?: protocolViolation("voice.error retryAfterMilliseconds is invalid")) }
+            assertVoiceBody(body)
+        }
         "push.endpoint" -> {
             body.requireUuidV4("endpointId")
             body.requireBoundedString("distributor", 128)
@@ -453,17 +537,24 @@ fun assertWireMessage(type: String, body: JsonObject) {
         }
         "terminal.history.request" -> {
             body.requireUuidV4("sessionId")
-            body.requireUint64OrNull("beforeSequence")
-            val limit = (body["limit"] as? JsonPrimitive)?.takeIf { !it.isString }?.content?.toIntOrNull()
-                ?: protocolViolation("terminal.history.request requires an integer limit")
-            if (limit !in 1..ProtocolConstants.maxTerminalHistoryLines) protocolViolation("terminal.history.request limit is out of bounds")
+            body.requireUint64("terminalGeneration")
+            val maxLines = (body["maxLines"] as? JsonPrimitive)?.takeIf { !it.isString }?.content?.toIntOrNull()
+                ?: protocolViolation("terminal.history.request requires an integer maxLines")
+            val maxBytes = (body["maxBytes"] as? JsonPrimitive)?.takeIf { !it.isString }?.content?.toIntOrNull()
+                ?: protocolViolation("terminal.history.request requires an integer maxBytes")
+            if (maxLines !in 1..ProtocolConstants.maxTerminalHistoryLines || maxBytes !in 1..ProtocolConstants.maxTerminalHistoryBytes) {
+                protocolViolation("terminal.history.request bounds are invalid")
+            }
         }
         "terminal.history.response" -> {
             body.requireUuidV4("sessionId")
-            val entries = (body["entries"] as? JsonArray) ?: protocolViolation("terminal.history.response requires entries")
-            if (entries.size > ProtocolConstants.maxTerminalHistoryLines) protocolViolation("terminal.history.response entries exceed their bound")
-            if (entries.any { it.stringOrNull() == null }) protocolViolation("terminal.history.response entries must be strings")
-            if ((body["truncated"] as? JsonPrimitive)?.booleanOrNull == null) protocolViolation("terminal.history.response requires a boolean truncated")
+            body.requireUint64("terminalGeneration")
+            requireDateTime(body["capturedAt"].stringOrNull())
+            val text = body["text"].stringOrNull() ?: protocolViolation("terminal.history.response requires text")
+            if ((body["truncatedLines"] as? JsonPrimitive)?.booleanOrNull == null || (body["truncatedBytes"] as? JsonPrimitive)?.booleanOrNull == null) {
+                protocolViolation("terminal.history.response requires truncation flags")
+            }
+            assertTerminalHistory(text, ProtocolConstants.maxTerminalHistoryLines, ProtocolConstants.maxTerminalHistoryBytes)
             if (body.toString().encodeToByteArray().size > ProtocolConstants.maxTerminalHistoryBytes) {
                 frameTooLarge("terminal.history.response exceeds its byte bound")
             }

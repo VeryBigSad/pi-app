@@ -138,6 +138,9 @@ interface PiMobileDao {
     @Query("DELETE FROM drafts WHERE sessionId = :sessionId")
     suspend fun deleteDraft(sessionId: String)
 
+    @Query("DELETE FROM drafts")
+    suspend fun clearDrafts()
+
     @Query("SELECT * FROM trust_states WHERE macId = :macId")
     suspend fun trustState(macId: String): TrustStateEntity?
 
@@ -227,18 +230,46 @@ interface PiMobileDao {
     }
 
     @Transaction
-    suspend fun commitFinalizedMessage(session: SessionEntity, message: MessageEntity) {
-        require(message.sessionId == session.sessionId)
-        require(message.authoritativeFinal.source == FinalMetadataSource.AUTHORITATIVE)
+    suspend fun commitCanonicalEvent(session: SessionEntity, finalized: MessageEntity?) {
+        require(finalized == null || finalized.sessionId == session.sessionId)
+        require(finalized == null || finalized.authoritativeFinal.source == FinalMetadataSource.AUTHORITATIVE)
         upsertSession(session)
-        upsertMessages(listOf(message))
+        if (finalized != null) upsertMessages(listOf(finalized))
         enforceCacheQuota()
     }
+
+    /** Compatibility entry point for callers that only have a finalized event. */
+    @Transaction
+    suspend fun commitFinalizedMessage(session: SessionEntity, message: MessageEntity) =
+        commitCanonicalEvent(session, message)
 
     /** Clears resync-able cache data only; drafts and trust state survive a sync reset. */
     @Transaction
     suspend fun clearAll() {
         clearSessions()
         clearCommandReceipts()
+    }
+
+    /** Full local trust-boundary reset for a user-initiated unpair. */
+    @Transaction
+    suspend fun revokeAndPurge(macId: String, revokedAtEpochMs: Long, reasonCode: String) {
+        require(macId.isNotBlank())
+        require(revokedAtEpochMs >= 0)
+        require(reasonCode.isNotBlank())
+        clearSessions()
+        clearDrafts()
+        clearCommandReceipts()
+        upsertTrustState(
+            TrustStateEntity(
+                macId = macId,
+                status = StoredTrustStatus.REVOKED,
+                displayName = null,
+                certificateSerial = null,
+                certificateNotAfterEpochMs = null,
+                revokedAtEpochMs = revokedAtEpochMs,
+                revocationReasonCode = reasonCode,
+                updatedAtEpochMs = revokedAtEpochMs,
+            ),
+        )
     }
 }

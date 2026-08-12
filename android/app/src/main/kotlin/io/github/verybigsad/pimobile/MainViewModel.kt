@@ -46,6 +46,12 @@ class MainViewModel(
 
     fun openTerminal(sessionId: SessionId) = container.openTerminal(sessionId)
 
+    fun selectPushProvider(packageName: String) = container.selectPushProvider(packageName)
+
+    fun requestPushRegistration() = container.requestPushRegistration()
+
+    fun unregisterPush() = container.unregisterPush()
+
     fun listUiState(appState: PiAppState, now: Long): SessionListUiState = SessionListUiState(
         trust = appState.trust,
         connection = appState.connection,
@@ -86,6 +92,8 @@ class MainViewModel(
             elapsedLabel = null,
             lastSyncedLabel = timeLabel(session.metadata.updatedAtEpochMillis, now),
             approvalOffer = appState.approval,
+            commandNotice = appState.commandNotices[sessionId],
+            voicePermission = appState.voicePermissionNotices[sessionId],
         )
     }
 

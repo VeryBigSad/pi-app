@@ -267,7 +267,6 @@ const ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_]+$/u;
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/u;
 const MAX_CATALOG_SESSIONS = 512;
 const MAX_SYNC_CURSORS = 512;
-const MAX_HISTORY_ENTRIES = MAX_TERMINAL_HISTORY_LINES;
 
 function violation(message: string): never {
   throw new ProtocolError("PROTOCOL_VIOLATION", message);
@@ -343,6 +342,25 @@ function assertAgentsCatalogSession(value: unknown): void {
   value["agents"].forEach(assertAgent);
 }
 
+function assertCanonicalEvent(value: unknown): void {
+  if (!isJsonObject(value)) violation("Canonical event must be an object");
+  const event = value as JsonObject;
+  const hasInline = typeof event["rawJson"] === "string";
+  const hasReference = isJsonObject(event["rawRef"]);
+  if (
+    !isUuidV4(event["sessionId"]) || !isUuidV4(event["streamEpoch"]) || !isUint64Text(event["sequence"])
+    || !isBoundedString(event["piType"], 128) || !isUint64Text(event["rawSize"])
+    || typeof event["rawSha256"] !== "string" || !SHA256_PATTERN.test(event["rawSha256"])
+    || !isJsonObject(event["projection"]) || hasInline === hasReference
+  ) violation("Canonical event is invalid");
+}
+
+function assertCanonicalBatch(body: JsonObject): void {
+  const events = body["events"];
+  if (!Array.isArray(events) || events.length === 0 || events.length > 128) violation("event.batch requires bounded events");
+  events.forEach(assertCanonicalEvent);
+}
+
 function assertSessionCatalogEntry(value: unknown): void {
   if (!isJsonObject(value)) violation("Session catalog entry must be an object");
   const entry = value as JsonObject;
@@ -377,10 +395,44 @@ export function assertWireMessage(type: string, body: JsonObject): void {
       return;
     }
     case "message.append": {
-      if (!isUuidV4(body["sessionId"]) || !isUuidV4(body["streamEpoch"]) || !isUint64Text(body["appendId"])) {
-        violation("message.append requires sessionId, streamEpoch, and a canonical uint64 appendId");
+      if (
+        !isUuidV4(body["sessionId"]) || !isUuidV4(body["streamEpoch"]) || !isUint64Text(body["sequence"])
+        || !isUint64Text(body["appendId"]) || body["piType"] !== "message_end"
+        || typeof body["rawJson"] !== "string" || !isUint64Text(body["rawSize"])
+        || typeof body["rawSha256"] !== "string" || !SHA256_PATTERN.test(body["rawSha256"])
+        || !isJsonObject(body["projection"])
+      ) {
+        violation("message.append requires one finalized canonical message_end record");
       }
       if (body["leafId"] !== undefined && !isLeaf(body["leafId"])) violation("message.append leafId is invalid");
+      return;
+    }
+    case "event.batch": {
+      assertCanonicalBatch(body);
+      return;
+    }
+    case "command.state": {
+      const state = body["state"];
+      const dormant = body["dormant"];
+      if (
+        !isUuidV4(body["commandId"]) || !["RECEIVED", "ARMED", "ACKED", "REJECTED", "INDETERMINATE"].includes(state as string)
+        || typeof dormant !== "boolean" || (dormant && state !== "RECEIVED")
+      ) violation("command.state requires a valid identity, state, and dormant flag");
+      const errorCode = body["errorCode"];
+      if (errorCode !== undefined && (!isBoundedString(errorCode, 64) || !ERROR_CODE_PATTERN.test(errorCode as string))) {
+        violation("command.state errorCode is invalid");
+      }
+      return;
+    }
+    case "command.result": {
+      const state = body["state"];
+      if (!isUuidV4(body["commandId"]) || !["ACKED", "REJECTED", "INDETERMINATE"].includes(state as string)) {
+        violation("command.result requires a valid identity and terminal state");
+      }
+      const errorCode = body["errorCode"];
+      if (errorCode !== undefined && (!isBoundedString(errorCode, 64) || !ERROR_CODE_PATTERN.test(errorCode as string))) {
+        violation("command.result errorCode is invalid");
+      }
       return;
     }
     case "session.settled": {
@@ -407,20 +459,30 @@ export function assertWireMessage(type: string, body: JsonObject): void {
       return;
     }
     case "snapshot.begin": {
-      if (!isUuidV4(body["sessionId"]) || !isUuidV4(body["streamEpoch"]) || !isUint64Text(body["messageCount"]) || !isUint64OrNull(body["lastAppendId"])) {
-        violation("snapshot.begin requires sessionId, streamEpoch, messageCount, and lastAppendId");
-      }
+      if (
+        !isUuidV4(body["sessionId"]) || !isUuidV4(body["streamEpoch"]) || !isUint64Text(body["sequence"]) ||
+        !isUint64Text(body["messageCount"]) || !isUint64OrNull(body["lastAppendId"])
+      ) violation("snapshot.begin requires sessionId, streamEpoch, sequence, messageCount, and lastAppendId");
       return;
     }
     case "snapshot.end": {
+      const pages = body["pages"];
       if (
-        !isUuidV4(body["sessionId"]) || !isUuidV4(body["streamEpoch"]) || !isUint64Text(body["messageCount"]) ||
+        !isUuidV4(body["sessionId"]) || !isUuidV4(body["streamEpoch"]) || !isUint64Text(body["sequence"]) ||
+        !Number.isInteger(pages) || (pages as number) < 0 || (pages as number) > 100_000 || !isUint64Text(body["messageCount"]) ||
         !isUint64OrNull(body["lastAppendId"]) || !isLeaf(body["leafId"]) || body["validated"] !== true
-      ) violation("snapshot.end requires sessionId, streamEpoch, messageCount, lastAppendId, leafId, and validated");
+      ) violation("snapshot.end requires sessionId, streamEpoch, sequence, pages, messageCount, lastAppendId, leafId, and validated");
+      return;
+    }
+    case "voice.start": {
+      if (!isUuidV4(body["streamId"]) || body["sampleRate"] !== 16_000 || body["channels"] !== 1 || body["sampleFormat"] !== "s16le") {
+        violation("voice.start requires a streamId and 16 kHz mono s16le format");
+      }
+      assertVoiceBody(body);
       return;
     }
     case "voice.audio": {
-      if (!isUuidV4(body["sessionId"]) || !isUint64Text(body["chunkSequence"]) || typeof body["final"] !== "boolean") {
+      if (!isUuidV4(body["sessionId"]) || !isUint64Text(body["chunkSequence"]) || typeof body["final"] !== "boolean" || body["audio"] !== undefined) {
         violation("voice.audio requires sessionId, chunkSequence, and final");
       }
       assertVoiceBody(body);
@@ -440,6 +502,21 @@ export function assertWireMessage(type: string, body: JsonObject): void {
       assertVoiceBody(body);
       return;
     }
+    case "voice.cancel": {
+      if (!isUuidV4(body["streamId"]) || !isBoundedString(body["reason"], 128)) violation("voice.cancel requires streamId and reason");
+      assertVoiceBody(body);
+      return;
+    }
+    case "voice.error": {
+      if (!isUuidV4(body["streamId"]) || !isBoundedString(body["code"], 64) || !ERROR_CODE_PATTERN.test(body["code"] as string) || typeof body["message"] !== "string" || body["message"].length > 1024) {
+        violation("voice.error requires streamId, code, and bounded message");
+      }
+      if (body["detailCode"] !== undefined && (!isBoundedString(body["detailCode"], 64) || !ERROR_CODE_PATTERN.test(body["detailCode"] as string))) violation("voice.error detailCode is invalid");
+      if (body["resetAtEpochMilliseconds"] !== undefined && !isUint64Text(body["resetAtEpochMilliseconds"])) violation("voice.error resetAtEpochMilliseconds is invalid");
+      if (body["retryAfterMilliseconds"] !== undefined && !isUint64Text(body["retryAfterMilliseconds"])) violation("voice.error retryAfterMilliseconds is invalid");
+      assertVoiceBody(body);
+      return;
+    }
     case "push.endpoint": {
       if (!isUuidV4(body["endpointId"]) || !isBoundedString(body["distributor"], 128) || !isBoundedString(body["endpoint"], 4096)) {
         violation("push.endpoint requires endpointId, distributor, and endpoint");
@@ -451,20 +528,23 @@ export function assertWireMessage(type: string, body: JsonObject): void {
       return;
     }
     case "terminal.history.request": {
-      const limit = body["limit"];
+      const maxLines = body["maxLines"];
+      const maxBytes = body["maxBytes"];
       if (
-        !isUuidV4(body["sessionId"]) || !isUint64OrNull(body["beforeSequence"]) ||
-        !Number.isInteger(limit) || (limit as number) < 1 || (limit as number) > MAX_TERMINAL_HISTORY_LINES
-      ) violation("terminal.history.request requires sessionId, beforeSequence, and a bounded limit");
+        !isUuidV4(body["sessionId"]) || !isUint64Text(body["terminalGeneration"]) ||
+        !Number.isInteger(maxLines) || (maxLines as number) < 1 || (maxLines as number) > MAX_TERMINAL_HISTORY_LINES ||
+        !Number.isInteger(maxBytes) || (maxBytes as number) < 1 || (maxBytes as number) > MAX_TERMINAL_HISTORY_BYTES
+      ) violation("terminal.history.request requires sessionId, terminalGeneration, maxLines, and maxBytes");
       return;
     }
     case "terminal.history.response": {
-      const entries = body["entries"];
       if (
-        !isUuidV4(body["sessionId"]) || !Array.isArray(entries) || entries.length > MAX_HISTORY_ENTRIES ||
-        entries.some((entry) => typeof entry !== "string") || typeof body["truncated"] !== "boolean"
- ) violation("terminal.history.response requires sessionId, string entries, and truncated");
-      if (Buffer.byteLength(JSON.stringify(body), "utf8") > MAX_TERMINAL_HISTORY_BYTES) {
+        !isUuidV4(body["sessionId"]) || !isUint64Text(body["terminalGeneration"]) || !isDateTime(body["capturedAt"]) ||
+        typeof body["text"] !== "string" || typeof body["truncatedLines"] !== "boolean" || typeof body["truncatedBytes"] !== "boolean"
+      ) violation("terminal.history.response requires a bounded tmux capture");
+      const text = body["text"] as string;
+      const lines = text.length === 0 ? 0 : (text.match(/\n/gu)?.length ?? 0) + (text.endsWith("\n") ? 0 : 1);
+      if (lines > MAX_TERMINAL_HISTORY_LINES || Buffer.byteLength(text, "utf8") > MAX_TERMINAL_HISTORY_BYTES || Buffer.byteLength(JSON.stringify(body), "utf8") > MAX_TERMINAL_HISTORY_BYTES) {
         throw new ProtocolError("FRAME_TOO_LARGE", "terminal.history.response exceeds its byte bound");
       }
       return;

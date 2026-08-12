@@ -38,6 +38,7 @@ object PushRuntimeInitializer {
             wakeReconnector = wakeReconnector,
         )
         restoreFromDurableStore(appContext)
+        runCatching { WakeWorkScheduler.restorePending(appContext) }
         return UnifiedPushClient(appContext).also { it.refreshProviderState() }
     }
 
@@ -79,6 +80,15 @@ object PushRuntimeInitializer {
             )
             else -> Unit
         }
+    }
+
+    /**
+     * Erases durable endpoint state after its owning Mac is unpaired. A pending revoke must not
+     * be replayed to a newly paired Mac, because endpoint operations are host-bound.
+     */
+    fun forgetRegistration(context: Context) {
+        PushRegistrationStore(context.applicationContext).clear()
+        UnifiedPushRuntime.updateRegistration(UnifiedPushRegistrationState.NotConfigured)
     }
 
     internal fun resetForTesting() {

@@ -49,7 +49,6 @@
     {"type":"terminal.open","family":"terminal","phases":["READY"],"stateChanging":true},
     {"type":"terminal.ready","family":"terminal","phases":["READY"],"stateChanging":false},
     {"type":"terminal.resize","family":"terminal","phases":["READY"],"stateChanging":true},
-    {"type":"terminal.key","family":"terminal","phases":["READY"],"stateChanging":true},
     {"type":"terminal.reset","family":"terminal","phases":["READY"],"stateChanging":false},
     {"type":"terminal.history.request","family":"terminal","phases":["READY"],"stateChanging":false},
     {"type":"terminal.history.response","family":"terminal","phases":["READY"],"stateChanging":false},

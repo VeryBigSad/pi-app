@@ -1,42 +1,45 @@
 name: Android Release
 
-# Manual, assisted-release pipeline: build/verify signed APK, mirror it anonymously to
-# VeryBigSad/pi-app, generate update-v1.json deterministically, publish the feed.
-#
-# Secrets:
-# - Environment "android-release": PIMOBILE_KEYSTORE_BASE64 + key passwords (local-signing path).
-#   When keystore secrets are absent, supply apk_run_id pointing at a workflow run whose
-#   app-release-signed artifact was produced by local signing (sign locally, then upload the APK
-#   as an artifact via `gh run upload` / actions/upload-artifact in a prior run).
-# - secrets.RELEASE_PUBLISH_TOKEN: fine-grained PAT (NOT GITHUB_TOKEN) scoped to repositories
-#   VeryBigSad/pi-app and VeryBigSad/verybigsad.github.io with contents:write — required
-#   for cross-repo release upload and feed push.
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (vX.Y.Z); must equal v{versionName} from gradle/app-version.properties"
+        description: "New immutable release tag (vX.Y.Z); must equal v{versionName}"
         required: true
         type: string
       apk_run_id:
-        description: "Optional run id whose app-release-signed artifact is the pre-signed APK (local-signing flow)"
+        description: "Source android-release run id for the pre-signed APK path"
+        required: false
+        type: string
+      apk_sha256:
+        description: "Required pre-signed APK SHA-256, bound to apk_run_id and this commit"
         required: false
         type: string
 
 permissions:
-  contents: write
+  actions: read
+  contents: read
+
+concurrency:
+  group: android-release
+  cancel-in-progress: false
 
 env:
   APK_PATH: android/app/build/outputs/apk/release/app-release.apk
+  GH_REPO: VeryBigSad/pi-app
+  RELEASE_TAG: ${{ inputs.tag }}
+  SOURCE_RUN_ID: ${{ inputs.apk_run_id }}
+  EXPECTED_APK_SHA256: ${{ inputs.apk_sha256 }}
 
 jobs:
   release:
-    # Signing and publishing are only ever allowed from main.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: android-release
     env:
       KEYSTORE_PRESENT: ${{ secrets.PIMOBILE_KEYSTORE_BASE64 != '' }}
+      KEYSTORE_PASSWORD_PRESENT: ${{ secrets.PIMOBILE_KEYSTORE_PASSWORD != '' }}
+      KEY_PASSWORD_PRESENT: ${{ secrets.PIMOBILE_KEY_PASSWORD != '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -53,19 +56,61 @@ jobs:
           cache: npm
       - run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
-      - name: Load release identity pin (canonical release/identity.properties)
+      - name: Validate request and signing mode
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "tag must be vX.Y.Z"; exit 1; }
+          if [[ "$KEYSTORE_PRESENT" == true || "$KEYSTORE_PASSWORD_PRESENT" == true || "$KEY_PASSWORD_PRESENT" == true ]]; then
+            [[ "$KEYSTORE_PRESENT" == true && "$KEYSTORE_PASSWORD_PRESENT" == true && "$KEY_PASSWORD_PRESENT" == true ]] || {
+              echo "all keystore, store-password, and key-password secrets must be configured together"
+              exit 1
+            }
+            [[ -z "$SOURCE_RUN_ID" && -z "$EXPECTED_APK_SHA256" ]] || {
+              echo "apk_run_id/apk_sha256 are only valid when keystore secrets are absent"
+              exit 1
+            }
+          else
+            [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]] || { echo "apk_run_id required for pre-signed mode"; exit 1; }
+            [[ "$EXPECTED_APK_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] || { echo "apk_sha256 required for pre-signed mode"; exit 1; }
+          fi
+
+      - name: Enforce immutable release policy, new tag, and monotonic versionCode
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
+        run: node scripts/verify-release-state.mjs "$RELEASE_TAG"
+
+      - name: Validate pre-signed source run
+        if: ${{ env.KEYSTORE_PRESENT != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_json=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID")
+          jq -e --arg sha "$GITHUB_SHA" --arg repo "$GITHUB_REPOSITORY" \
+            '.head_sha == $sha and .head_branch == "main" and .head_repository.full_name == $repo and .status == "completed" and .conclusion == "success"' \
+            <<<"$run_json" >/dev/null || { echo "source run is not a completed run for this main commit"; exit 1; }
+          workflow_id=$(jq -r '.workflow_id' <<<"$run_json")
+          workflow_json=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_id")
+          jq -e '.path == ".github/workflows/android-signed-artifact.yml"' <<<"$workflow_json" >/dev/null || {
+            echo "source run was not produced by android-signed-artifact.yml"
+            exit 1
+          }
+          artifacts=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/artifacts?per_page=100")
+          jq -e '[.artifacts[] | select(.name == "app-release-signed" and .expired == false)] | length == 1' \
+            <<<"$artifacts" >/dev/null || { echo "source run must have exactly one live app-release-signed artifact"; exit 1; }
+
+      - name: Load release identity pin
         run: |
           pin=$(sed -n 's/^certificateSha256=//p' release/identity.properties | tr -d '[:space:]')
-          test -n "$pin" || { echo "release/identity.properties missing certificateSha256"; exit 1; }
+          [[ "$pin" =~ ^([0-9A-F]{2}:){31}[0-9A-F]{2}$ ]] || { echo "canonical certificate pin invalid"; exit 1; }
           echo "PIN=$pin" >> "$GITHUB_ENV"
 
-      - name: Decode release keystore (when Environment secrets exist)
+      - name: Decode release keystore
         if: ${{ env.KEYSTORE_PRESENT == 'true' }}
         env:
           PIMOBILE_KEYSTORE_BASE64: ${{ secrets.PIMOBILE_KEYSTORE_BASE64 }}
         run: |
           mkdir -p "$RUNNER_TEMP/keystore"
           printf '%s' "$PIMOBILE_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/keystore/release.p12"
+          chmod 600 "$RUNNER_TEMP/keystore/release.p12"
           echo "PI_MOBILE_KEYSTORE_PATH=$RUNNER_TEMP/keystore/release.p12" >> "$GITHUB_ENV"
 
       - name: Build release APK
@@ -76,90 +121,156 @@ jobs:
           PI_MOBILE_KEY_ALIAS: ${{ secrets.PIMOBILE_KEY_ALIAS }}
         run: ./gradlew --no-daemon :android:app:assembleRelease
 
-      - name: Fetch pre-signed APK artifact (local-signing flow)
+      - name: Fetch commit-bound pre-signed APK artifact
         if: ${{ env.KEYSTORE_PRESENT != 'true' }}
-        uses: actions/download-artifact@018ccb2cd3f31446a44ef1a714fd76a6b1b5e5e0
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: app-release-signed
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
           run-id: ${{ inputs.apk_run_id }}
           path: ${{ runner.temp }}/presigned
 
-      - name: Stage pre-signed APK
+      - name: Stage the only pre-signed APK
         if: ${{ env.KEYSTORE_PRESENT != 'true' }}
         run: |
-          test -n "${{ inputs.apk_run_id }}" || { echo "apk_run_id required when keystore secrets are absent"; exit 1; }
-          apk=$(find "$RUNNER_TEMP/presigned" -name '*.apk' | head -n1)
-          test -n "$apk" || { echo "no pre-signed apk artifact"; exit 1; }
+          mapfile -d '' apks < <(find "$RUNNER_TEMP/presigned" -type f -name '*.apk' -print0)
+          test "${#apks[@]}" -eq 1 || { echo "pre-signed artifact must contain exactly one APK"; exit 1; }
           mkdir -p "$(dirname "$APK_PATH")"
-          cp "$apk" "$APK_PATH"
+          cp "${apks[0]}" "$APK_PATH"
 
-      - name: Verify APK identity fail-closed (apksigner + fingerprint pin)
+      - name: Verify package, version, signer, and APK SHA-256
         run: |
-          apksigner=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n1)
-          out=$("$apksigner" verify --print-certs "$APK_PATH")
-          echo "$out"
-          signers=$(echo "$out" | grep -c 'certificate SHA-256 digest:' || true)
-          test "$signers" -eq 1 || { echo "expected exactly one signer, got $signers"; exit 1; }
-          digest=$(echo "$out" | grep -m1 'certificate SHA-256 digest:' | sed -E 's/.*: ([0-9a-f]{64}).*/\1/' | tr 'a-f' 'A-F' | sed 's/../&:/g; s/:$//')
-          test "$digest" = "$PIN" || { echo "certificate $digest != pin $PIN"; exit 1; }
-          echo "$digest" > "$RUNNER_TEMP/cert.sha256"
-
-      - name: Verify release identity (repo DAL cross-check)
-        run: node scripts/verify-release-identity.mjs "$APK_PATH"
-
-      - name: Verify tag matches versionName and versionCode is monotonic
-        run: |
-          props=gradle/app-version.properties
-          grep -q '^versionCode=[1-9][0-9]*$' "$props" || { echo "versionCode invalid"; exit 1; }
-          versionName=$(sed -n 's/^versionName=//p' "$props" | tr -d '[:space:]')
-          test "${{ inputs.tag }}" = "v$versionName" || { echo "tag ${{ inputs.tag }} != v$versionName"; exit 1; }
-
-      - name: Publish mirror release (anonymous APK download)
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
-          GH_REPO: VeryBigSad/pi-app
-        run: |
-          if gh release view "${{ inputs.tag }}" --repo "$GH_REPO" >/dev/null 2>&1; then
-            gh release upload "${{ inputs.tag }}" "$APK_PATH#app-release.apk" --repo "$GH_REPO" --clobber
-          else
-            gh release create "${{ inputs.tag }}" "$APK_PATH#app-release.apk" --repo "$GH_REPO" \
-              --title "${{ inputs.tag }}" --notes "Pi Mobile ${{ inputs.tag }} (anonymous APK mirror)"
+          args=("$APK_PATH" --tag "$RELEASE_TAG" --out "$RUNNER_TEMP/release-verification.json")
+          if [[ "$KEYSTORE_PRESENT" != true ]]; then
+            args+=(--expected-sha256 "$EXPECTED_APK_SHA256")
           fi
+          node scripts/verify-release-identity.mjs "${args[@]}"
+          apk_sha256=$(jq -r '.sha256' "$RUNNER_TEMP/release-verification.json")
+          test "$apk_sha256" != null || { echo "verified APK SHA-256 missing"; exit 1; }
+          echo "APK_SHA256=$apk_sha256" >> "$GITHUB_ENV"
 
-      - name: Verify anonymous download
-        run: |
-          url="https://github.com/VeryBigSad/pi-app/releases/download/${{ inputs.tag }}/app-release.apk"
-          code=$(curl -sSL -o "$RUNNER_TEMP/mirror.apk" -w '%{http_code}' "$url")
-          test "$code" = "200" || { echo "anonymous download HTTP $code"; exit 1; }
-          cmp -s "$RUNNER_TEMP/mirror.apk" "$APK_PATH" || { echo "mirror bytes differ"; exit 1; }
-
-      - name: Generate update-v1.json deterministically
-        run: |
-          node scripts/generate-update-metadata.mjs "$APK_PATH" "${{ inputs.tag }}" \
-            --certificate-sha256 "$(cat "$RUNNER_TEMP/cert.sha256")" --out "$RUNNER_TEMP/update-v1.json"
-
-      - name: Publish feed to VeryBigSad/verybigsad.github.io
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
-        run: |
-          rm -rf "$RUNNER_TEMP/pages"
-          git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/VeryBigSad/verybigsad.github.io.git" "$RUNNER_TEMP/pages"
-          mkdir -p "$RUNNER_TEMP/pages/pi-mobile"
-          cp "$RUNNER_TEMP/update-v1.json" "$RUNNER_TEMP/pages/pi-mobile/update-v1.json"
-          cd "$RUNNER_TEMP/pages"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add pi-mobile/update-v1.json
-          if git diff --cached --quiet; then
-            echo "feed already up to date"
-          else
-            git commit -m "pi-mobile: publish update feed for ${{ inputs.tag }}"
-            git push
-          fi
-
-      - name: Upload signed APK artifact
-        uses: actions/upload-artifact@330a01c49064d7c7b5cd9b5e3b4bb5a60e0a878a
+      - name: Preserve verified signed APK as a run artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: app-release-signed
           path: ${{ env.APK_PATH }}
           if-no-files-found: error
+          retention-days: 30
+
+      - name: Generate deterministic release metadata
+        run: |
+          published_at=$(git show -s --format=%cI "$GITHUB_SHA")
+          node scripts/generate-update-metadata.mjs "$APK_PATH" "$RELEASE_TAG" \
+            --certificate-sha256 "$PIN" --published-at "$published_at" --out "$RUNNER_TEMP/update-v1.json" >/dev/null
+          metadata_sha256=$(sha256sum "$RUNNER_TEMP/update-v1.json" | cut -d' ' -f1)
+          echo "METADATA_SHA256=$metadata_sha256" >> "$GITHUB_ENV"
+
+      - name: Create new draft release with complete assets
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            "$APK_PATH#app-release.apk" "$RUNNER_TEMP/update-v1.json#update-v1.json" \
+            --repo "$GH_REPO" --target "$GITHUB_SHA" --draft \
+            --title "$RELEASE_TAG" --notes "Pi Mobile $RELEASE_TAG (anonymous APK mirror)"
+
+      - name: Verify draft assets before irreversible publication
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
+        run: |
+          release_json=$(gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG")
+          jq -e --arg sha "$GITHUB_SHA" \
+            '.draft == true and .prerelease == false and .immutable == false and .target_commitish == $sha' \
+            <<<"$release_json" >/dev/null || { echo "draft release identity differs"; exit 1; }
+          jq -e '[.assets[].name] | sort == ["app-release.apk", "update-v1.json"]' \
+            <<<"$release_json" >/dev/null || { echo "draft release asset set differs"; exit 1; }
+          apk_digest=$(jq -r '.assets[] | select(.name == "app-release.apk") | .digest' <<<"$release_json")
+          metadata_digest=$(jq -r '.assets[] | select(.name == "update-v1.json") | .digest' <<<"$release_json")
+          test "$apk_digest" = "sha256:$APK_SHA256" || { echo "draft APK digest differs"; exit 1; }
+          test "$metadata_digest" = "sha256:$METADATA_SHA256" || { echo "draft metadata digest differs"; exit 1; }
+          rm -rf "$RUNNER_TEMP/draft-assets"
+          mkdir -p "$RUNNER_TEMP/draft-assets"
+          gh release download "$RELEASE_TAG" --repo "$GH_REPO" --dir "$RUNNER_TEMP/draft-assets" \
+            --pattern app-release.apk --pattern update-v1.json
+          cmp -s "$RUNNER_TEMP/draft-assets/app-release.apk" "$APK_PATH" || { echo "draft APK bytes differ"; exit 1; }
+          cmp -s "$RUNNER_TEMP/draft-assets/update-v1.json" "$RUNNER_TEMP/update-v1.json" || {
+            echo "draft metadata bytes differ"
+            exit 1
+          }
+
+      - name: Publish and lock immutable release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
+        run: gh release edit "$RELEASE_TAG" --repo "$GH_REPO" --draft=false --latest
+
+      - name: Verify immutable release attestation, target, assets, and anonymous bytes
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
+        run: |
+          release_json=
+          for attempt in {1..12}; do
+            release_json=$(gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG")
+            if jq -e '.draft == false and .prerelease == false and .immutable == true' <<<"$release_json" >/dev/null; then
+              break
+            fi
+            test "$attempt" -lt 12 || { echo "published release is not immutable"; exit 1; }
+            sleep 5
+          done
+          ref_json=$(gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG")
+          jq -e --arg sha "$GITHUB_SHA" '.object.type == "commit" and .object.sha == $sha' \
+            <<<"$ref_json" >/dev/null || { echo "release tag does not point exactly at target commit"; exit 1; }
+          for attempt in {1..12}; do
+            if gh release verify "$RELEASE_TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+              break
+            fi
+            test "$attempt" -lt 12 || { echo "immutable release attestation unavailable"; exit 1; }
+            sleep 5
+          done
+          gh release verify-asset "$RELEASE_TAG" "$APK_PATH" --repo "$GH_REPO" >/dev/null
+          gh release verify-asset "$RELEASE_TAG" "$RUNNER_TEMP/update-v1.json" --repo "$GH_REPO" >/dev/null
+          rm -rf "$RUNNER_TEMP/immutable-assets"
+          mkdir -p "$RUNNER_TEMP/immutable-assets"
+          apk_url="https://github.com/$GH_REPO/releases/download/$RELEASE_TAG/app-release.apk"
+          metadata_url="https://github.com/$GH_REPO/releases/download/$RELEASE_TAG/update-v1.json"
+          curl --fail --location --retry 6 --retry-all-errors --retry-delay 2 \
+            --output "$RUNNER_TEMP/immutable-assets/app-release.apk" "$apk_url"
+          curl --fail --location --retry 6 --retry-all-errors --retry-delay 2 \
+            --output "$RUNNER_TEMP/immutable-assets/update-v1.json" "$metadata_url"
+          cmp -s "$RUNNER_TEMP/immutable-assets/app-release.apk" "$APK_PATH" || { echo "immutable APK bytes differ"; exit 1; }
+          cmp -s "$RUNNER_TEMP/immutable-assets/update-v1.json" "$RUNNER_TEMP/update-v1.json" || {
+            echo "immutable metadata bytes differ"
+            exit 1
+          }
+          node scripts/verify-release-identity.mjs "$RUNNER_TEMP/immutable-assets/app-release.apk" \
+            --tag "$RELEASE_TAG" --expected-sha256 "$APK_SHA256" >/dev/null
+
+      - name: Publish verified immutable asset as update feed
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
+        run: |
+          rm -rf "$RUNNER_TEMP/pages"
+          auth=$(printf '%s' "x-access-token:$GH_TOKEN" | base64 | tr -d '\n')
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth"
+          git clone --depth 1 "https://github.com/VeryBigSad/verybigsad.github.io.git" "$RUNNER_TEMP/pages"
+          git -C "$RUNNER_TEMP/pages" config --local --unset-all http.https://github.com/.extraheader || true
+          git -C "$RUNNER_TEMP/pages" remote set-url origin \
+            "https://github.com/VeryBigSad/verybigsad.github.io.git"
+          mkdir -p "$RUNNER_TEMP/pages/pi-mobile"
+          feed="$RUNNER_TEMP/pages/pi-mobile/update-v1.json"
+          if [[ -f "$feed" ]]; then
+            node scripts/verify-release-state.mjs --feed-advance \
+              "$feed" "$RUNNER_TEMP/immutable-assets/update-v1.json"
+          fi
+          cp "$RUNNER_TEMP/immutable-assets/update-v1.json" "$feed"
+          cd "$RUNNER_TEMP/pages"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pi-mobile/update-v1.json
+          git diff --cached --quiet && { echo "refusing unchanged feed for a new immutable release"; exit 1; }
+          git commit -m "pi-mobile: publish update feed for $RELEASE_TAG"
+          test "$(git remote get-url origin)" = "https://github.com/VeryBigSad/verybigsad.github.io.git"
+          git push origin HEAD:main
+          unset auth GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0

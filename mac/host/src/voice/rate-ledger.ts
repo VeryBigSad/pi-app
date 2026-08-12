@@ -46,6 +46,10 @@ interface AttemptRow {
   estimated_usd: number;
 }
 
+interface LedgerStateRow {
+  effective_now_ms: number;
+}
+
 export class VoiceRateLedger {
   private readonly database: Database.Database;
   readonly limits: VoiceLimits;
@@ -69,7 +73,16 @@ export class VoiceRateLedger {
         estimated_usd REAL NOT NULL
       ) STRICT;
       CREATE INDEX IF NOT EXISTS voice_attempts_time ON voice_attempts(attempted_at_ms);
+      CREATE TABLE IF NOT EXISTS voice_ledger_state (
+        singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+        effective_now_ms INTEGER NOT NULL CHECK(effective_now_ms >= 0)
+      ) STRICT;
     `);
+    const latestAttempt = (this.database.prepare("SELECT MAX(attempted_at_ms) AS value FROM voice_attempts").get() as { value: number | null }).value ?? 0;
+    this.database.prepare(`
+      INSERT INTO voice_ledger_state(singleton, effective_now_ms) VALUES (1, ?)
+      ON CONFLICT(singleton) DO UPDATE SET effective_now_ms = MAX(voice_ledger_state.effective_now_ms, excluded.effective_now_ms)
+    `).run(latestAttempt);
   }
 
   close(): void {
@@ -79,26 +92,25 @@ export class VoiceRateLedger {
   reserve(chunkId: string, encodedSeconds: number, nowMs: number): VoiceReservation {
     if (chunkId.length === 0 || chunkId.length > 128) throw new TypeError("chunkId is invalid");
     if (!Number.isFinite(encodedSeconds) || encodedSeconds <= 0 || encodedSeconds > 30) throw new TypeError("encodedSeconds is invalid");
-    if (!Number.isSafeInteger(nowMs) || nowMs < 0) throw new TypeError("nowMs is invalid");
+    validateNow(nowMs);
     const billedSeconds = Math.max(encodedSeconds, 10);
     const estimatedUsd = billedSeconds / 3_600 * this.limits.usdPerBilledHour;
 
-    return this.database.transaction((): VoiceReservation => {
-      const maxSeen = (this.database.prepare("SELECT MAX(attempted_at_ms) AS value FROM voice_attempts").get() as { value: number | null }).value ?? nowMs;
-      const purgeBeforeMs = Math.min(nowMs, maxSeen) - RETENTION_MS;
-      this.database.prepare("DELETE FROM voice_attempts WHERE attempted_at_ms < ?").run(purgeBeforeMs);
+    const reserve = this.database.transaction((): VoiceReservation => {
+      const effectiveNow = this.advanceEffectiveNow(nowMs);
+      this.database.prepare("DELETE FROM voice_attempts WHERE attempted_at_ms < ?").run(effectiveNow - RETENTION_MS);
       const rows = this.database.prepare(`
         SELECT attempted_at_ms, encoded_seconds, billed_seconds, estimated_usd
         FROM voice_attempts WHERE attempted_at_ms > ? AND attempted_at_ms <= ? ORDER BY attempted_at_ms ASC
-      `).all(nowMs - RETENTION_MS, nowMs) as AttemptRow[];
+      `).all(effectiveNow - RETENTION_MS, effectiveNow) as AttemptRow[];
 
       const checks: Array<VoiceReservation | undefined> = [
-        countLimit(rows, nowMs, 60_000, this.limits.requestsPerMinute, "VOICE_RPM_LIMIT"),
-        countLimit(rows, nowMs, 24 * 60 * 60 * 1_000, this.limits.requestsPerDay, "VOICE_RPD_LIMIT"),
-        sumLimit(rows, nowMs, 60 * 60 * 1_000, "encoded_seconds", encodedSeconds, this.limits.audioSecondsPerHour, "VOICE_ASH_LIMIT"),
-        sumLimit(rows, nowMs, 24 * 60 * 60 * 1_000, "encoded_seconds", encodedSeconds, this.limits.audioSecondsPerDay, "VOICE_ASD_LIMIT"),
-        budgetLimit(rows, nowMs, estimatedUsd, this.limits.usdPerUtcDay, false),
-        budgetLimit(rows, nowMs, estimatedUsd, this.limits.usdPerUtcMonth, true),
+        countLimit(rows, effectiveNow, 60_000, this.limits.requestsPerMinute, "VOICE_RPM_LIMIT"),
+        countLimit(rows, effectiveNow, 24 * 60 * 60 * 1_000, this.limits.requestsPerDay, "VOICE_RPD_LIMIT"),
+        sumLimit(rows, effectiveNow, 60 * 60 * 1_000, "encoded_seconds", encodedSeconds, this.limits.audioSecondsPerHour, "VOICE_ASH_LIMIT"),
+        sumLimit(rows, effectiveNow, 24 * 60 * 60 * 1_000, "encoded_seconds", encodedSeconds, this.limits.audioSecondsPerDay, "VOICE_ASD_LIMIT"),
+        budgetLimit(rows, effectiveNow, estimatedUsd, this.limits.usdPerUtcDay, false),
+        budgetLimit(rows, effectiveNow, estimatedUsd, this.limits.usdPerUtcMonth, true),
       ];
       const denied = checks.find((value) => value !== undefined);
       if (denied !== undefined) return denied;
@@ -107,21 +119,36 @@ export class VoiceRateLedger {
       this.database.prepare(`
         INSERT INTO voice_attempts(attempt_id, chunk_id, attempted_at_ms, encoded_seconds, billed_seconds, estimated_usd)
         VALUES (?, ?, ?, ?, ?, ?)
-      `).run(attemptId, chunkId, nowMs, encodedSeconds, billedSeconds, estimatedUsd);
+      `).run(attemptId, chunkId, effectiveNow, encodedSeconds, billedSeconds, estimatedUsd);
       return { allowed: true, attemptId, encodedSeconds, billedSeconds, estimatedUsd };
-    })();
+    });
+    return reserve.immediate();
   }
 
   totals(nowMs: number): { readonly attempts: number; readonly encodedSeconds: number; readonly billedSeconds: number; readonly estimatedUsd: number } {
-    const start = startOfUtcMonth(nowMs);
-    const row = this.database.prepare(`
-      SELECT COUNT(*) attempts,
-             COALESCE(SUM(encoded_seconds), 0) encodedSeconds,
-             COALESCE(SUM(billed_seconds), 0) billedSeconds,
-             COALESCE(SUM(estimated_usd), 0) estimatedUsd
-      FROM voice_attempts WHERE attempted_at_ms >= ? AND attempted_at_ms <= ?
-    `).get(start, nowMs) as { attempts: number; encodedSeconds: number; billedSeconds: number; estimatedUsd: number };
-    return row;
+    validateNow(nowMs);
+    const totals = this.database.transaction(() => {
+      const effectiveNow = this.advanceEffectiveNow(nowMs);
+      const start = startOfUtcMonth(effectiveNow);
+      return this.database.prepare(`
+        SELECT COUNT(*) attempts,
+               COALESCE(SUM(encoded_seconds), 0) encodedSeconds,
+               COALESCE(SUM(billed_seconds), 0) billedSeconds,
+               COALESCE(SUM(estimated_usd), 0) estimatedUsd
+        FROM voice_attempts WHERE attempted_at_ms >= ? AND attempted_at_ms <= ?
+      `).get(start, effectiveNow) as { attempts: number; encodedSeconds: number; billedSeconds: number; estimatedUsd: number };
+    });
+    return totals.immediate();
+  }
+
+  private advanceEffectiveNow(nowMs: number): number {
+    const state = this.database.prepare("SELECT effective_now_ms FROM voice_ledger_state WHERE singleton = 1").get() as LedgerStateRow | undefined;
+    if (state === undefined) throw new Error("voice ledger state is unavailable");
+    const effectiveNow = Math.max(nowMs, state.effective_now_ms);
+    if (effectiveNow !== state.effective_now_ms) {
+      this.database.prepare("UPDATE voice_ledger_state SET effective_now_ms = ? WHERE singleton = 1").run(effectiveNow);
+    }
+    return effectiveNow;
   }
 }
 
@@ -190,4 +217,8 @@ function validateLimits(limits: VoiceLimits): void {
   for (const value of Object.values(limits)) {
     if (!Number.isFinite(value) || value <= 0) throw new TypeError("voice limit is invalid");
   }
+}
+
+function validateNow(nowMs: number): void {
+  if (!Number.isSafeInteger(nowMs) || nowMs < 0) throw new TypeError("nowMs is invalid");
 }

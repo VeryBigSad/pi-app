@@ -276,16 +276,42 @@ private fun NotificationsSection(
     state: NotificationSettingsUiState,
     actions: SettingsActions,
 ) {
+    var showDistributorChooser by rememberSaveable { mutableStateOf(false) }
+    val distributorOptions = when (val distributor = state.distributor) {
+        is PushDistributorState.SelectionRequired -> distributor.options
+        is PushDistributorState.Available -> distributor.alternatives
+        else -> emptyList()
+    }
     SectionCard(title = "Notifications") {
         when (val distributor = state.distributor) {
             PushDistributorState.Unavailable ->
                 LabelValueRow(label = "Push distributor", value = null)
-            PushDistributorState.NoneInstalled ->
+            PushDistributorState.NoneInstalled -> {
                 LabelValueRow(
                     label = "Push distributor",
                     value = "None installed",
                     valueIsError = true,
                 )
+                Text(
+                    "Install a compatible UnifiedPush distributor, then return here to register.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            is PushDistributorState.SelectionRequired -> {
+                LabelValueRow(
+                    label = "Push distributor",
+                    value = "Selection required",
+                    valueIsError = true,
+                )
+                Button(
+                    onClick = { showDistributorChooser = true },
+                    modifier = Modifier.semantics {
+                        contentDescription = "Choose push distributor"
+                    },
+                ) {
+                    Text("Choose distributor")
+                }
+            }
             is PushDistributorState.Available -> {
                 LabelValueRow(label = "Push distributor", value = distributor.distributorName)
                 LabelValueRow(
@@ -293,17 +319,55 @@ private fun NotificationsSection(
                     value = if (distributor.connected) "Connected" else "Not connected",
                     valueIsError = !distributor.connected,
                 )
+                if (distributor.alternatives.size > 1) {
+                    TextButton(
+                        onClick = { showDistributorChooser = true },
+                        modifier = Modifier.semantics {
+                            contentDescription = "Change push distributor"
+                        },
+                    ) {
+                        Text("Change distributor")
+                    }
+                }
             }
         }
         LabelValueRow(
             label = "Endpoint registration",
             value = when (state.endpointRegistration) {
                 EndpointRegistrationState.UNKNOWN -> null
+                EndpointRegistrationState.REGISTRATION_REQUESTED -> "Registration requested"
                 EndpointRegistrationState.REGISTERED -> "Registered"
                 EndpointRegistrationState.NOT_REGISTERED -> "Not registered"
+                EndpointRegistrationState.FAILED -> "Registration failed"
             },
-            valueIsError = state.endpointRegistration == EndpointRegistrationState.NOT_REGISTERED,
+            valueIsError = state.endpointRegistration == EndpointRegistrationState.NOT_REGISTERED ||
+                state.endpointRegistration == EndpointRegistrationState.FAILED,
         )
+        if (state.distributor is PushDistributorState.Available) {
+            val registrationAction = when (state.endpointRegistration) {
+                EndpointRegistrationState.REGISTERED -> null
+                EndpointRegistrationState.FAILED -> "Retry registration"
+                else -> "Register for notifications"
+            }
+            if (registrationAction != null) {
+                Button(
+                    onClick = actions.onRequestPushRegistration,
+                    modifier = Modifier.semantics { contentDescription = registrationAction },
+                ) {
+                    Text(registrationAction)
+                }
+            }
+            if (state.endpointRegistration != EndpointRegistrationState.UNKNOWN &&
+                state.endpointRegistration != EndpointRegistrationState.NOT_REGISTERED
+            ) {
+                TextButton(
+                    onClick = actions.onUnregisterPush,
+                    modifier = Modifier.semantics { contentDescription = "Unregister push notifications" },
+                ) {
+                    Text("Unregister")
+                }
+            }
+        }
         when (state.postNotificationsPermission) {
             NotificationPermissionState.NOT_REQUIRED ->
                 LabelValueRow(label = "Notification permission", value = "Not required")
@@ -338,6 +402,35 @@ private fun NotificationsSection(
                 )
             }
         }
+    }
+    if (showDistributorChooser && distributorOptions.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = { showDistributorChooser = false },
+            title = { Text("Choose push distributor") },
+            text = {
+                Column {
+                    distributorOptions.forEach { option ->
+                        TextButton(
+                            onClick = {
+                                showDistributorChooser = false
+                                actions.onSelectPushDistributor(option.packageName)
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .semantics {
+                                    contentDescription = "Select push distributor ${option.label}"
+                                },
+                        ) {
+                            Text(option.label)
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showDistributorChooser = false }) { Text("Cancel") }
+            },
+        )
     }
 }
 

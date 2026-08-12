@@ -91,7 +91,7 @@ Measured on a release build with R8 and a Baseline Profile via Macrobenchmark, o
 - The payload is an opaque bounded wake with no session name, prompt, file name, or result, and stays within the distributor's message-size limit. Detail is fetched over the authenticated channel and rendered locally after unlock. A forged wake grants no authority beyond triggering catch-up.
 - Duplicate wakes for one settlement produce one notification. App-open catch-up is authoritative.
 - Delivery limits are documented honestly: Doze, OEM battery policy, force-stop, notification permission, and distributor availability. There is no delivery guarantee.
-- With no distributor installed, the app explains the situation and offers in-app catch-up rather than silently failing.
+- With no distributor installed, the app explains the situation and offers in-app catch-up rather than silently failing. When several compatible UnifiedPush distributors are installed, Settings presents their local package labels in an accessible explicit chooser; a single compatible distributor may be persisted and selected automatically through the connector. Settings supports registration retry, unregister, and changing distributor. Endpoint URLs and notification content are never shown or logged.
 
 ## R9 — Voice input with defined semantics
 

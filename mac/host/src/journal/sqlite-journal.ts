@@ -174,6 +174,18 @@ export class SqliteCommandJournal implements CommandJournalStore {
     }
   }
 
+  async deleteSession(sessionId: string): Promise<number> {
+    await Promise.resolve();
+    if (!UUID_V4.test(sessionId)) throw new JournalStoreError("E2E_SESSION_INVALID");
+    try {
+      return this.database.transaction(() =>
+        this.database.prepare("DELETE FROM commands WHERE session_id = ?").run(sessionId).changes,
+      ).immediate();
+    } catch (error) {
+      throw unavailable(error);
+    }
+  }
+
   private select(commandId: string): CommandRow | undefined {
     return this.database.prepare("SELECT * FROM commands WHERE command_id = ?").get(commandId) as CommandRow | undefined;
   }

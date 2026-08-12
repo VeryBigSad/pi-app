@@ -66,7 +66,7 @@ fun PiAppRoot(viewModel: MainViewModel, activityActions: AppActivityActions = Ap
                     val sessionId = requireNotNull(state.selectedSessionId)
                     BackHandler { viewModel.submit(AppIntent.NavigateBack) }
                     androidx.compose.foundation.layout.Box(modifier = Modifier.fillMaxSize()) {
-                        SessionDetailDestination(viewModel, sessionId)
+                        SessionDetailDestination(viewModel, sessionId, activityActions)
                         SessionDetailEntryPoints(
                             onOpenAgents = { viewModel.submit(AppIntent.OpenAgents) },
                             modifier = Modifier.align(androidx.compose.ui.Alignment.TopEnd),

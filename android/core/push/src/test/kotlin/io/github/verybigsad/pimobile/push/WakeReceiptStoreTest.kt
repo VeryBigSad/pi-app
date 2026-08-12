@@ -59,15 +59,43 @@ class WakeReceiptStoreTest {
     }
 
     @Test
-    fun singletonWorkNameNeverContainsWakeId() {
-        val wakeId = wakeId("abcdefghijklmnopqrstuv")
+    fun keepWorkNameIsOpaqueAndUniquePerWake() {
+        val first = wakeId("abcdefghijklmnopqrstuv")
+        val second = wakeId("bcdefghijklmnopqrstuvw")
 
-        assertThat(WakeWorkNames.UNIQUE_WORK_NAME).doesNotContain(wakeId.value)
-        assertThat(WakeWorkNames.UNIQUE_WORK_NAME).isEqualTo("pi-push-reconnect")
+        assertThat(WakeWorkNames.workName(first)).startsWith("pi-push-reconnect-")
+        assertThat(WakeWorkNames.workName(first)).doesNotContain(first.value)
+        assertThat(WakeWorkNames.workName(first)).isNotEqualTo(WakeWorkNames.workName(second))
+    }
+
+    @Test
+    fun pendingWakeMarkerSurvivesSchedulingAndRemovesAfterDrain() {
+        val persistence = MemoryPendingPersistence()
+        val store = WakePendingStore.forTest(persistence)
+        val first = wakeId("abcdefghijklmnopqrstuv")
+        val second = wakeId("bcdefghijklmnopqrstuvw")
+
+        store.enqueue(first)
+        store.enqueue(second)
+        store.enqueue(first)
+        assertThat(store.all().map { it.value }).containsExactly(second.value, first.value).inOrder()
+
+        store.remove(second)
+        assertThat(store.all().map { it.value }).containsExactly(first.value)
     }
 
     private fun wakeId(value: String): OpaqueWakeId =
         (OpaqueWakePayload.parse(value) as WakePayloadParseResult.Valid).wakeId
+
+    private class MemoryPendingPersistence(initial: String = "") : WakePendingPersistence {
+        var value = initial
+
+        override fun read(): String = value
+
+        override fun write(value: String) {
+            this.value = value
+        }
+    }
 
     private class MemoryPersistence(initial: String = "") : WakeReceiptPersistence {
         var value = initial

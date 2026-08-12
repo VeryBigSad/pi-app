@@ -30,7 +30,11 @@ fun SessionListDestination(viewModel: MainViewModel) {
 }
 
 @Composable
-fun SessionDetailDestination(viewModel: MainViewModel, sessionId: SessionId) {
+fun SessionDetailDestination(
+    viewModel: MainViewModel,
+    sessionId: SessionId,
+    activityActions: AppActivityActions = AppActivityActions(),
+) {
     val state by viewModel.state.collectAsState()
     val uiState = viewModel.detailUiState(state, sessionId, System.currentTimeMillis())
     if (uiState == null) {
@@ -49,6 +53,12 @@ fun SessionDetailDestination(viewModel: MainViewModel, sessionId: SessionId) {
     }
     SessionDetailScreen(
         state = uiState,
-        onEvent = { event -> viewModel.submit(AppIntent.DetailEvent(sessionId, event)) },
+        onEvent = { event ->
+            if (event == io.github.verybigsad.pimobile.session.SessionDetailEvent.OpenVoicePermissionSettings) {
+                activityActions.onOpenVoicePermissionSettings()
+            } else {
+                viewModel.submit(AppIntent.DetailEvent(sessionId, event))
+            }
+        },
     )
 }

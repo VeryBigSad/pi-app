@@ -28,8 +28,7 @@ import kotlinx.serialization.json.booleanOrNull
  * reducer events and storage entities.
  *
  * Adapter gaps:
- * - The wire event carries no appendId/settlementId; sequence-derived opaque ids
- *   ("seq-<epoch>-<sequence>") are used. They are stable and distinct from 8-hex leaf ids.
+ * - Finalized wire records carry their durable numeric appendId verbatim through reducer and storage.
  * - Provisional revisions are assigned from a per-message monotonic counter because the
  *   projection does not carry one.
  * - createdAt/finalizedAt fall back to the event receive time when the projection's message
@@ -83,7 +82,7 @@ class EventProjectionMapper(
                 provisionalRevisions.remove(model.id.value)
                 Mapped(
                     cursor,
-                    ConversationEvent.MessageFinalized(cursor, AppendId(appendIdFor(cursor)), model),
+                    ConversationEvent.MessageFinalized(cursor, AppendId(finalized.appendId!!), model),
                     finalized,
                 )
             }
@@ -128,6 +127,7 @@ class EventProjectionMapper(
     ): MessageEntity? {
         message ?: return null
         val id = message.string("id") ?: ("msg-" + cursor.streamEpoch.value + "-" + cursor.sequence.text)
+        val appendId = event.string("appendId")?.takeIf(Uint64Decimal::isCanonical) ?: return null
         val content = message["content"] ?: return null
         val rawJson = event.string("rawJson")
         val rawRef = event["rawRef"] as? JsonObject
@@ -140,7 +140,7 @@ class EventProjectionMapper(
             messageId = id,
             parentId = null,
             appendOrder = cursor.sequence.text,
-            appendId = appendIdFor(cursor),
+            appendId = appendId,
             role = StorageMappers.storedRole(role(message.string("role"))),
             state = FinalizedMessageState.FINALIZED,
             contentJson = content.toString(),
@@ -169,8 +169,5 @@ class EventProjectionMapper(
 
     companion object {
         private val LEAF_PATTERN = Regex("^[0-9a-f]{8}$")
-
-        /** Sequence-derived opaque append id; stable, unique per cursor, never an 8-hex leaf id. */
-        fun appendIdFor(cursor: EventCursor): String = "seq-${cursor.streamEpoch.value}-${cursor.sequence.text}"
     }
 }

@@ -40,9 +40,9 @@ describe("captureCanonicalSnapshot", () => {
     const source = new FakeSource([
       {
         entries: [
-          { id: "aaaabbbb", parentId: null },
-          { id: "ccccdddd", parentId: "aaaabbbb" },
-          { id: "eeeeffff", parentId: "ccccdddd" },
+          { id: "aaaabbbb", appendId: "1", parentId: null },
+          { id: "ccccdddd", appendId: "2", parentId: "aaaabbbb" },
+          { id: "eeeeffff", appendId: "3", parentId: "ccccdddd" },
         ],
         leafId: "aaaabbbb",
       },
@@ -50,22 +50,22 @@ describe("captureCanonicalSnapshot", () => {
     ]);
 
     const snapshot = await captureCanonicalSnapshot(source);
-    expect(source.calls).toEqual([undefined, "eeeeffff"]);
-    expect(snapshot).toMatchObject({ leafId: "aaaabbbb", lastAppendId: "eeeeffff", attempts: 1 });
+    expect(source.calls).toEqual([undefined, "3"]);
+    expect(snapshot).toMatchObject({ leafId: "aaaabbbb", lastAppendId: "3", attempts: 1 });
   });
 
   it("retries the whole attempt after a concurrent append", async () => {
     const source = new FakeSource([
-      { entries: [{ id: "aaaabbbb" }], leafId: "aaaabbbb" },
-      { entries: [{ id: "ccccdddd" }], leafId: "ccccdddd" },
-      { entries: [{ id: "aaaabbbb" }, { id: "ccccdddd" }], leafId: "ccccdddd" },
+      { entries: [{ id: "aaaabbbb", appendId: "1" }], leafId: "aaaabbbb" },
+      { entries: [{ id: "ccccdddd", appendId: "2" }], leafId: "ccccdddd" },
+      { entries: [{ id: "aaaabbbb", appendId: "1" }, { id: "ccccdddd", appendId: "2" }], leafId: "ccccdddd" },
       { entries: [], leafId: "ccccdddd" },
     ]);
 
     const snapshot = await captureCanonicalSnapshot(source);
     expect(snapshot.attempts).toBe(2);
     expect(source.barriers).toBe(2);
-    expect(source.calls).toEqual([undefined, "aaaabbbb", undefined, "ccccdddd"]);
+    expect(source.calls).toEqual([undefined, "1", undefined, "2"]);
   });
 
   it("repeats a full query to validate an empty session", async () => {

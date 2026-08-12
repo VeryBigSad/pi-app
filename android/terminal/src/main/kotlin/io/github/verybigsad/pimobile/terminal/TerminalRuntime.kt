@@ -31,6 +31,7 @@ private val CanonicalBase64Pattern = Regex("^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+
 class TerminalRuntime(
     private val context: Context,
     private val forceCanaryFailure: Boolean = false,
+    private val forceReadyWithoutCanary: Boolean = false,
     private val onEvent: (TerminalEvent) -> Unit,
 ) {
     private val sequenceState = TerminalSequenceState()
@@ -148,7 +149,12 @@ class TerminalRuntime(
                 else -> onEvent(TerminalEvent.Failure("TERMINAL_MESSAGE_INVALID"))
             }
         }
-        view.loadUrl(if (forceCanaryFailure) "$TerminalAssetUrl?forceCanaryFailure=1" else TerminalAssetUrl)
+        val query = when {
+            forceReadyWithoutCanary -> "forceReadyWithoutCanary=1"
+            forceCanaryFailure -> "forceCanaryFailure=1"
+            else -> null
+        }
+        view.loadUrl(query?.let { "$TerminalAssetUrl?$it" } ?: TerminalAssetUrl)
         return view
     }
 

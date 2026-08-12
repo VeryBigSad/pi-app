@@ -1,4 +1,4 @@
-import type { JsonObject } from "@pimobile/protocol";
+import { MAX_JSON_PAYLOAD_BYTES, type JsonObject } from "@pimobile/protocol";
 import type {
   TerminalChannel,
   TerminalOpenResult,
@@ -6,7 +6,7 @@ import type {
   TerminalRuntime,
 } from "../gateway/types.js";
 import { StreamGatewayError } from "../gateway/streams.js";
-import type { TerminalAttachment, TerminalBackend, TerminalSession } from "../terminal/backend.js";
+import type { TerminalBackend, TerminalSession } from "../terminal/backend.js";
 import { MAX_TERMINAL_HISTORY_BYTES, MAX_TERMINAL_HISTORY_LINES } from "../terminal/types.js";
 
 export interface TerminalRuntimeAdapterOptions {
@@ -21,8 +21,6 @@ export interface TerminalRuntimeAdapterOptions {
  * backend. The gateway owns wire sequencing; the backend owns PTY ordering.
  */
 export class TerminalRuntimeAdapter implements TerminalRuntime {
-  private readonly attachments = new Map<string, { session: TerminalSession; attachment: TerminalAttachment }>();
-
   constructor(private readonly options: TerminalRuntimeAdapterOptions) {}
 
   async open(request: JsonObject, output: TerminalOutput, signal: AbortSignal): Promise<TerminalOpenResult> {
@@ -55,7 +53,6 @@ export class TerminalRuntimeAdapter implements TerminalRuntime {
         return undefined;
       },
     });
-    this.attachments.set(sessionId, { session, attachment });
     const generation = attachment.terminalGeneration;
     let inboundSequence = 0n;
     const channel: TerminalChannel = {
@@ -73,9 +70,15 @@ export class TerminalRuntimeAdapter implements TerminalRuntime {
         resetSignal.throwIfAborted();
         await output.reset(reason, resetSignal);
       },
+      history: async (request, historySignal) => await terminalHistory(
+        sessionId,
+        session,
+        generation,
+        request,
+        historySignal,
+      ),
       close: async (reason) => {
         void reason;
-        this.attachments.delete(sessionId);
         await attachment.detach();
       },
     };
@@ -86,33 +89,101 @@ export class TerminalRuntimeAdapter implements TerminalRuntime {
     };
   }
 
-  async history(request: JsonObject, signal: AbortSignal): Promise<JsonObject> {
-    signal.throwIfAborted();
-    const sessionId = request["sessionId"];
-    const generationRaw = request["terminalGeneration"];
-    if (typeof sessionId !== "string" || typeof generationRaw !== "string") {
-      throw new StreamGatewayError("PROTOCOL_VIOLATION", "terminal.history.request is invalid");
-    }
-    const entry = this.attachments.get(sessionId);
-    if (entry === undefined) throw new StreamGatewayError("TERMINAL_RESET_REQUIRED", "terminal is not attached");
-    const result = await entry.session.history({
-      terminalGeneration: BigInt(generationRaw),
-      maxLines: boundedLimit(request["maxLines"], MAX_TERMINAL_HISTORY_LINES),
-      maxBytes: boundedLimit(request["maxBytes"], MAX_TERMINAL_HISTORY_BYTES),
-    });
-    return {
-      terminalGeneration: result.terminalGeneration.toString(),
-      capturedAt: result.capturedAt,
-      text: result.text,
-      truncated: result.truncatedLines || result.truncatedBytes,
-      truncatedLines: result.truncatedLines,
-      truncatedBytes: result.truncatedBytes,
-    };
-  }
 }
 
-function boundedLimit(value: unknown, maximum: number): number {
-  if (value === undefined) return maximum;
-  if (!Number.isSafeInteger(value)) throw new StreamGatewayError("PROTOCOL_VIOLATION", "terminal.history.request limit is invalid");
-  return Math.min(Math.max(value as number, 1), maximum);
+async function terminalHistory(
+  sessionId: string,
+  session: TerminalSession,
+  generation: bigint,
+  request: JsonObject,
+  signal: AbortSignal,
+): Promise<JsonObject> {
+  signal.throwIfAborted();
+  const requestedSessionId = request["sessionId"];
+  const generationRaw = request["terminalGeneration"];
+  if (
+    requestedSessionId !== sessionId || !UUID_V4.test(sessionId)
+    || typeof generationRaw !== "string" || !UINT64_DECIMAL.test(generationRaw)
+    || BigInt(generationRaw) > UINT64_MAX || BigInt(generationRaw) !== generation
+  ) {
+    throw new StreamGatewayError("TERMINAL_RESET_REQUIRED", "terminal history capability is stale");
+  }
+  const result = await session.history({
+    terminalGeneration: generation,
+    maxLines: requiredBound(request["maxLines"], MAX_TERMINAL_HISTORY_LINES),
+    maxBytes: requiredBound(request["maxBytes"], MAX_TERMINAL_HISTORY_BYTES),
+  });
+  if (result.terminalGeneration !== generation) {
+    throw new StreamGatewayError("TERMINAL_RESET_REQUIRED", "terminal history generation changed");
+  }
+  return boundResponse({
+    sessionId,
+    terminalGeneration: result.terminalGeneration.toString(),
+    capturedAt: result.capturedAt,
+    text: result.text,
+    truncatedLines: result.truncatedLines,
+    truncatedBytes: result.truncatedBytes,
+  });
+}
+
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const UINT64_DECIMAL = /^(0|[1-9][0-9]{0,19})$/u;
+const UINT64_MAX = 18_446_744_073_709_551_615n;
+
+function requiredBound(value: unknown, maximum: number): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > maximum) {
+    throw new StreamGatewayError("PROTOCOL_VIOLATION", "terminal.history.request bound is invalid");
+  }
+  return value as number;
+}
+
+function boundResponse(response: {
+  sessionId: string;
+  terminalGeneration: string;
+  capturedAt: string;
+  text: string;
+  truncatedLines: boolean;
+  truncatedBytes: boolean;
+}): JsonObject {
+  let text = response.text;
+  let truncatedBytes = response.truncatedBytes;
+  if (jsonBytes(response, text, truncatedBytes) > MAX_JSON_PAYLOAD_BYTES) {
+    let low = 0;
+    let high = text.length;
+    while (low < high) {
+      let middle = Math.floor((low + high) / 2);
+      if (middle > 0 && isLowSurrogate(text.charCodeAt(middle))) middle += 1;
+      if (jsonBytes(response, text.slice(middle), true) <= MAX_JSON_PAYLOAD_BYTES) high = middle;
+      else low = middle + 1;
+    }
+    if (low > 0 && isLowSurrogate(text.charCodeAt(low))) low += 1;
+    text = text.slice(low);
+    truncatedBytes = true;
+  }
+  if (jsonBytes(response, text, truncatedBytes) > MAX_JSON_PAYLOAD_BYTES) {
+    throw new StreamGatewayError("PROTOCOL_VIOLATION", "terminal.history.response exceeds JSON bounds");
+  }
+  return { ...response, text, truncatedBytes };
+}
+
+function jsonBytes(response: {
+  sessionId: string;
+  terminalGeneration: string;
+  capturedAt: string;
+  text: string;
+  truncatedLines: boolean;
+  truncatedBytes: boolean;
+}, text: string, truncatedBytes: boolean): number {
+  const body = { ...response, text, truncatedBytes };
+  return Buffer.byteLength(JSON.stringify({
+    v: { major: 1, minor: 0 },
+    type: "terminal.history.response",
+    messageId: "00000000-0000-4000-8000-000000000000",
+    replyTo: null,
+    body,
+  }), "utf8");
+}
+
+function isLowSurrogate(value: number): boolean {
+  return value >= 0xdc00 && value <= 0xdfff;
 }

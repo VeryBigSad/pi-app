@@ -2,6 +2,7 @@ package io.github.verybigsad.pimobile
 
 import android.Manifest
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -11,8 +12,10 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import io.github.verybigsad.pimobile.model.SessionId
@@ -38,13 +41,46 @@ class MainActivity : ComponentActivity() {
         container.notificationPermission.refresh()
     }
 
+    private var activeVoicePermissionRequestId: Long? = null
+
+    private val voicePermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        val requestId = activeVoicePermissionRequestId ?: return@registerForActivityResult
+        activeVoicePermissionRequestId = null
+        viewModel.submit(
+            AppIntent.VoicePermissionResult(
+                requestId = requestId,
+                granted = granted,
+                permanentlyDenied = !granted && !shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO),
+            ),
+        )
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        activeVoicePermissionRequestId = if (savedInstanceState?.containsKey(VOICE_PERMISSION_REQUEST_ID) == true) {
+            savedInstanceState.getLong(VOICE_PERMISSION_REQUEST_ID).takeIf { it != NO_VOICE_PERMISSION_REQUEST }
+        } else {
+            null
+        }
+
         enableEdgeToEdge()
         maybeRequestNotificationPermissionOnUpdateEnable()
         handleIntent(intent)
         setContent {
             val state by viewModel.state.collectAsState()
+            val voicePermissionRequest = state.voicePermissionRequest
+            LaunchedEffect(voicePermissionRequest?.requestId) {
+                val request = voicePermissionRequest ?: return@LaunchedEffect
+                if (
+                    activeVoicePermissionRequestId != request.requestId &&
+                    lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+                ) {
+                    activeVoicePermissionRequestId = request.requestId
+                    voicePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                }
+            }
             // Recents/thumbnails never show authenticated content.
             val secure = state.trust is io.github.verybigsad.pimobile.model.TrustState.Trusted
             if (secure) {
@@ -69,8 +105,14 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onPause() {
+        activeVoicePermissionRequestId?.let { viewModel.submit(AppIntent.VoicePermissionCancelled(it)) }
         (application as PiMobileApplication).passkeyBridge.detach(this)
         super.onPause()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putLong(VOICE_PERMISSION_REQUEST_ID, activeVoicePermissionRequestId ?: NO_VOICE_PERMISSION_REQUEST)
+        super.onSaveInstanceState(outState)
     }
 
     private fun activityActions(): AppActivityActions = AppActivityActions(
@@ -99,6 +141,14 @@ class MainActivity : ComponentActivity() {
         },
         onOpenInstallPermissionSettings = {
             runCatching { startActivity(container.updateIntegration.installPermissionIntent()) }
+        },
+        onOpenVoicePermissionSettings = {
+            runCatching {
+                startActivity(
+                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                        .setData(Uri.fromParts("package", packageName, null)),
+                )
+            }
         },
     )
 
@@ -142,5 +192,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_SESSION_ID = "io.github.verybigsad.pimobile.extra.SESSION_ID"
+        private const val VOICE_PERMISSION_REQUEST_ID = "voice_permission_request_id"
+        private const val NO_VOICE_PERMISSION_REQUEST = Long.MIN_VALUE
     }
 }

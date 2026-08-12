@@ -7,6 +7,8 @@ import java.security.MessageDigest
 internal object WakeWorkNames {
     const val UNIQUE_WORK_NAME = "pi-push-reconnect"
 
+    fun workName(wakeId: OpaqueWakeId): String = "$UNIQUE_WORK_NAME-${receiptId(wakeId)}"
+
     fun receiptId(wakeId: OpaqueWakeId): String {
         val digest = MessageDigest.getInstance("SHA-256").digest(wakeId.value.toByteArray(Charsets.US_ASCII))
         return buildString(digest.size * 2) {
@@ -40,6 +42,74 @@ private class SharedPreferencesWakeReceiptPersistence(context: Context) : WakeRe
     companion object {
         const val PREFERENCES_NAME = "pi_push_receipts_v1"
         const val RECEIPTS_KEY = "completed_wake_hashes"
+    }
+}
+
+internal interface WakePendingPersistence {
+    fun read(): String
+
+    fun write(value: String)
+}
+
+private class SharedPreferencesWakePendingPersistence(context: Context) : WakePendingPersistence {
+    private val preferences = context.getSharedPreferences(
+        SharedPreferencesWakeReceiptPersistence.PREFERENCES_NAME,
+        Context.MODE_PRIVATE,
+    )
+
+    override fun read(): String = preferences.getString(PENDING_KEY, "").orEmpty()
+
+    @SuppressLint("UseKtx")
+    override fun write(value: String) {
+        check(preferences.edit().putString(PENDING_KEY, value).commit())
+    }
+
+    companion object {
+        const val PENDING_KEY = "pending_wake_ids"
+    }
+}
+
+internal class WakePendingStore private constructor(
+    private val persistence: WakePendingPersistence,
+) {
+    constructor(context: Context) : this(SharedPreferencesWakePendingPersistence(context.applicationContext))
+
+    fun enqueue(wakeId: OpaqueWakeId) = synchronized(WakeReceiptStore.lock) {
+        val values = load().filterNot { it == wakeId.value }.toMutableList()
+        values += wakeId.value
+        while (values.size > MAX_PENDING) values.removeAt(0)
+        persistence.write(values.joinToString(SEPARATOR))
+    }
+
+    fun remove(wakeId: OpaqueWakeId) = synchronized(WakeReceiptStore.lock) {
+        persistence.write(load().filterNot { it == wakeId.value }.joinToString(SEPARATOR))
+    }
+
+    fun all(): List<OpaqueWakeId> = synchronized(WakeReceiptStore.lock) {
+        load().map(::OpaqueWakeId)
+    }
+
+    private fun load(): List<String> {
+        val stored = persistence.read()
+        if (stored.isEmpty()) return emptyList()
+        if (stored.length > MAX_SERIALIZED_CHARS) {
+            persistence.write("")
+            return emptyList()
+        }
+        return stored.split(SEPARATOR).mapNotNull { value ->
+            when (val parsed = OpaqueWakePayload.parse(value)) {
+                is WakePayloadParseResult.Valid -> parsed.wakeId.value
+                is WakePayloadParseResult.Invalid -> null
+            }
+        }.distinct().takeLast(MAX_PENDING)
+    }
+
+    internal companion object {
+        const val MAX_PENDING = 256
+        const val SEPARATOR = "\n"
+        const val MAX_SERIALIZED_CHARS = MAX_PENDING * (OpaqueWakePayload.MAX_WAKE_ID_BYTES + SEPARATOR.length)
+
+        fun forTest(persistence: WakePendingPersistence): WakePendingStore = WakePendingStore(persistence)
     }
 }
 

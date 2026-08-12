@@ -157,6 +157,8 @@ sealed interface ConversationEvent {
 sealed interface ConversationAction {
     data class EventReceived(val event: ConversationEvent) : ConversationAction
 
+    data class CursorAdvanced(val cursor: EventCursor) : ConversationAction
+
     data class SyncReset(
         val reason: CanonicalResetReason,
         val observedCursor: EventCursor?,
@@ -170,6 +172,7 @@ object ConversationReducer {
         is ConversationAction.SyncReset -> unavailable(state, action.reason, action.observedCursor)
         is ConversationAction.SnapshotCommitted -> commitSnapshot(state, action.snapshot)
         is ConversationAction.EventReceived -> applyEvent(state, action.event)
+        is ConversationAction.CursorAdvanced -> advanceCursor(state, action.cursor)
     }
 
     private fun commitSnapshot(state: ConversationState, snapshot: CanonicalSnapshot): ConversationState {
@@ -186,6 +189,20 @@ object ConversationReducer {
             lastSettlementId = null,
             hasOlderMessages = snapshot.hasOlderMessages || snapshot.finalizedMessages.size > retained.size,
         )
+    }
+
+    private fun advanceCursor(state: ConversationState, cursor: EventCursor): ConversationState {
+        if (state.availability !is CanonicalAvailability.Current) return state
+        val current = state.cursor ?: return unavailable(state, CanonicalResetReason.INVALID_TRANSITION, cursor)
+        if (cursor.streamEpoch != current.streamEpoch) {
+            return unavailable(state, CanonicalResetReason.EPOCH_CHANGED, cursor)
+        }
+        if (cursor.sequence <= current.sequence) return state
+        val expectedSequence = current.sequence.incremented()
+        if (expectedSequence == null || cursor.sequence != expectedSequence) {
+            return unavailable(state, CanonicalResetReason.SEQUENCE_GAP, cursor)
+        }
+        return state.copy(cursor = cursor)
     }
 
     private fun applyEvent(state: ConversationState, event: ConversationEvent): ConversationState {

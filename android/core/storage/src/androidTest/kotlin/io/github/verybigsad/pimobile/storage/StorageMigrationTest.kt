@@ -159,6 +159,42 @@ class StorageMigrationTest {
     }
 
     @Test
+    fun migration3To4PreservesLegacyRowsWithCwdPathDefaults() {
+        helper.createDatabase(DATABASE_NAME, 3).apply {
+            execSQL(
+                """
+                INSERT INTO `sessions` (
+                    `sessionId`, `cwd`, `displayName`, `provider`, `modelId`, `thinkingLevel`,
+                    `updatedAtEpochMs`, `canonical_stream_epoch`, `canonical_sequence`,
+                    `canonical_leaf_id`, `canonical_last_append_id`
+                ) VALUES ('session-1', '/tmp/project/worktree', 'Legacy', 'openai', 'model', 'medium',
+                    10, 'epoch-1', '7', '7fa3c91e', 'append-1')
+                """.trimIndent(),
+            )
+            close()
+        }
+
+        helper.runMigrationsAndValidate(
+            DATABASE_NAME,
+            4,
+            true,
+            StorageMigrations.MIGRATION_3_4,
+        ).use { database ->
+            database.query(
+                """
+                SELECT `repositoryPath`, `worktreePath`, `parentSessionId`
+                FROM `sessions` WHERE `sessionId` = 'session-1'
+                """.trimIndent(),
+            ).use { cursor ->
+                assertThat(cursor.moveToFirst()).isTrue()
+                assertThat(cursor.getString(0)).isEqualTo("/tmp/project/worktree")
+                assertThat(cursor.getString(1)).isEqualTo("/tmp/project/worktree")
+                assertThat(cursor.isNull(2)).isTrue()
+            }
+        }
+    }
+
+    @Test
     fun migratedCheckConstraintsRejectNonCanonicalUint64() {
         helper.createDatabase(DATABASE_NAME, 2).apply { close() }
         val database = helper.runMigrationsAndValidate(

@@ -120,13 +120,19 @@ export interface SnapshotSyncPlan {
   readonly streamEpoch: string;
   readonly source: SnapshotSource;
   readonly adjunctPages?: readonly JsonObject[];
-  readonly catalog?: JsonObject;
   readonly agentsCatalog?: JsonObject;
 }
 
 export type GatewaySyncPlan = ReplaySyncPlan | SnapshotSyncPlan;
 
 export interface SyncRuntime {
+  /** Full protocol-valid session catalog published once at the start of every resume. */
+  catalog(signal: AbortSignal): Promise<readonly JsonObject[]>;
+  /** Optional atomic registry view used to keep catalog and fresh-session queue consistent. */
+  inventory?(signal: AbortSignal): Promise<{
+    readonly catalog: readonly JsonObject[];
+    readonly resumes: readonly JsonObject[];
+  }>;
   prepare(resume: JsonObject, signal: AbortSignal): Promise<GatewaySyncPlan>;
   committed(plan: GatewaySyncPlan, sequence: bigint, signal: AbortSignal): Promise<void>;
   /** Resume-shaped entries for every currently supervised session; used when a device resumes with no cursors. */
@@ -193,6 +199,7 @@ export interface TerminalChannel {
   write(data: Uint8Array, signal: AbortSignal): Promise<void>;
   resize?(columns: number, rows: number, signal: AbortSignal): Promise<void>;
   reset?(reason: string, signal: AbortSignal): Promise<void>;
+  history?(request: JsonObject, signal: AbortSignal): Promise<JsonObject>;
   close(reason: string): Promise<void>;
 }
 
@@ -204,7 +211,6 @@ export interface TerminalOpenResult {
 
 export interface TerminalRuntime {
   open(request: JsonObject, output: TerminalOutput, signal: AbortSignal): Promise<TerminalOpenResult>;
-  history?(request: JsonObject, signal: AbortSignal): Promise<JsonObject>;
 }
 
 export interface OutboundMessage {
@@ -215,18 +221,13 @@ export interface OutboundMessage {
 
 export interface VoiceAudioChunk {
   readonly sessionId: string;
-  readonly chunkSequence: number;
+  readonly chunkSequence: bigint;
   readonly final: boolean;
   readonly pcm16le: Uint8Array;
 }
 
-export interface VoiceTranscriptSink {
-  partial(update: { readonly sessionId: string; readonly chunkSequence: number; readonly revision: number; readonly text: string }, signal: AbortSignal): Promise<void>;
-  finish(update: { readonly sessionId: string; readonly chunkSequence: number; readonly text: string }, signal: AbortSignal): Promise<void>;
-}
-
 export interface VoiceRuntime {
-  submit(chunk: VoiceAudioChunk, sink: VoiceTranscriptSink, signal: AbortSignal): Promise<void>;
+  submit(chunk: VoiceAudioChunk, signal: AbortSignal): Promise<string>;
 }
 
 export interface UnknownMessageSink {

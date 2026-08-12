@@ -26,6 +26,8 @@
     "fixtures:generate": "npm run generate --workspace @pimobile/protocol-tools",
     "dal:verify": "node scripts/verify-dal.mjs",
     "fixtures:verify": "npm run verify --workspace @pimobile/protocol-tools",
+    "e2e:installed": "tsx tests/e2e/cli.ts",
+    "e2e:test": "vitest run tests/e2e",
     "lint": "eslint .",
     "pi:smoke": "tsx mac/host/src/smoke-pi.ts",
     "pi:smoke:daemon": "tsx mac/host/src/smoke-daemon.ts",

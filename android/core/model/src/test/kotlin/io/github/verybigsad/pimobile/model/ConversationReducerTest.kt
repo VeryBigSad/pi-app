@@ -40,6 +40,21 @@ class ConversationReducerTest {
     }
 
     @Test
+    fun canonicalNoOpAtSnapshotFenceSuccessorKeepsLaterLiveEventContiguous() {
+        var state = ConversationReducer.reduce(
+            ConversationState.awaitingCanonical(sessionId),
+            ConversationAction.SnapshotCommitted(snapshot(cursor(5), persistentListOf())),
+        )
+
+        state = ConversationReducer.reduce(state, ConversationAction.CursorAdvanced(cursor(6)))
+        state = event(state, ConversationEvent.RunStateChanged(cursor(7), SessionRunState.STREAMING))
+
+        assertThat(state.availability).isEqualTo(CanonicalAvailability.Current)
+        assertThat(state.cursor).isEqualTo(cursor(7))
+        assertThat(state.runState).isEqualTo(SessionRunState.STREAMING)
+    }
+
+    @Test
     fun sequenceGapDropsAllProvisionalStateAndWaitsForCanonicalSnapshot() {
         var state = ConversationReducer.reduce(
             ConversationState.awaitingCanonical(sessionId),

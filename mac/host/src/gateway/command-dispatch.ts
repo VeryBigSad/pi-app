@@ -21,6 +21,14 @@ export class CommandGatewayError extends Error {
   }
 }
 
+/** A validated Pi RPC response explicitly rejected a command before any success was journaled. */
+export class CommandDispatchRejectedError extends Error {
+  constructor(readonly code: "PI_RPC_REJECTED") {
+    super(code);
+    this.name = "CommandDispatchRejectedError";
+  }
+}
+
 export interface CommandExecutionContext extends CommandGuardContext {
   authorized(): boolean;
 }
@@ -154,6 +162,14 @@ export class AtMostOnceCommandDispatcher {
       return { record: acked.record, dispatched: true };
     } catch (error) {
       try {
+        if (error instanceof CommandDispatchRejectedError) {
+          const rejected = await this.journal.transition(command.commandId, command.payloadHash, {
+            kind: "reject",
+            atMs: this.clock.now(),
+            errorCode: error.code,
+          });
+          return { record: rejected.record, dispatched: true };
+        }
         const indeterminate = await this.journal.transition(command.commandId, command.payloadHash, {
           kind: "indeterminate",
           atMs: this.clock.now(),

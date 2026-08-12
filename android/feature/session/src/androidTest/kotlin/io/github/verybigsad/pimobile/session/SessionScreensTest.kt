@@ -54,6 +54,44 @@ class SessionScreensTest {
     }
 
     @Test
+    fun deniedMicrophonePermissionOffersAnExplicitRetry() {
+        val events = mutableListOf<SessionDetailEvent>()
+        compose.setContent {
+            SessionTheme {
+                SessionDetailScreen(
+                    state = previewDetailState().copy(voicePermission = VoicePermissionUiState.Denied),
+                    onEvent = events::add,
+                )
+            }
+        }
+
+        compose.onNodeWithText("Microphone access was denied.", substring = true).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription("Ask Android for microphone access again")
+            .performScrollTo()
+            .performSemanticsAction(SemanticsActions.OnClick)
+        assertEquals(listOf(SessionDetailEvent.StartVoice), events)
+    }
+
+    @Test
+    fun permanentlyDeniedMicrophonePermissionGuidesToSettings() {
+        val events = mutableListOf<SessionDetailEvent>()
+        compose.setContent {
+            SessionTheme {
+                SessionDetailScreen(
+                    state = previewDetailState().copy(voicePermission = VoicePermissionUiState.PermanentlyDenied),
+                    onEvent = events::add,
+                )
+            }
+        }
+
+        compose.onNodeWithText("blocked in Android settings", substring = true).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription("Open Android app settings to enable microphone access")
+            .performScrollTo()
+            .performSemanticsAction(SemanticsActions.OnClick)
+        assertEquals(listOf(SessionDetailEvent.OpenVoicePermissionSettings), events)
+    }
+
+    @Test
     fun passkeyProviderUnavailableKeepsSessionListLocked() {
         val detail = previewDetailState()
         val state = SessionListUiState(

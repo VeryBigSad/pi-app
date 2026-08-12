@@ -167,6 +167,8 @@ private fun AvailableDetail(
                         SessionComposer(
                             draft = state.session.draft,
                             runState = state.session.conversation.runState,
+                            commandNotice = state.commandNotice,
+                            voicePermission = state.voicePermission,
                             enabled = state.canMutate,
                             onEvent = onEvent,
                         )
@@ -201,6 +203,8 @@ private fun AvailableDetail(
                 SessionComposer(
                     draft = state.session.draft,
                     runState = state.session.conversation.runState,
+                    commandNotice = state.commandNotice,
+                    voicePermission = state.voicePermission,
                     enabled = state.canMutate,
                     onEvent = onEvent,
                 )

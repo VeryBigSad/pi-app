@@ -40,14 +40,36 @@ class UnifiedPushClientTest {
     }
 
     @Test
-    fun missingSelectionIsDistinctFromUnavailableProvider() {
+    fun exactlyOneProviderIsPersistedAndSelectedBeforeRegistration() {
         platform.providers = listOf("org.example.distributor")
 
         assertThat(client.refreshProviderState()).isEqualTo(
-            UnifiedPushProviderState.ProviderSelectionRequired(1),
+            UnifiedPushProviderState.ProviderSelected("org.example.distributor"),
+        )
+        assertThat(platform.saved).isEqualTo("org.example.distributor")
+        assertThat(client.requestRegistration()).isEqualTo(UnifiedPushRegistrationState.RegistrationRequested)
+        assertThat(platform.registeredInstance).isEqualTo(UnifiedPushClient.PUSH_INSTANCE)
+    }
+
+    @Test
+    fun multipleProvidersRequireExplicitSelection() {
+        platform.providers = listOf("org.example.first", "org.example.second")
+
+        assertThat(client.refreshProviderState()).isEqualTo(
+            UnifiedPushProviderState.ProviderSelectionRequired(2),
         )
         assertThat(client.requestRegistration()).isEqualTo(UnifiedPushRegistrationState.NotConfigured)
         assertThat(platform.registeredInstance).isNull()
+    }
+
+    @Test
+    fun providerChoicesUseSanitizedPackageLabels() {
+        platform.providers = listOf("org.example.distributor")
+        platform.labels["org.example.distributor"] = "  Example\u202E Push\n  "
+
+        assertThat(client.availableProviderChoices()).containsExactly(
+            UnifiedPushProvider("org.example.distributor", "Example Push"),
+        )
     }
 
     @Test
@@ -138,6 +160,10 @@ class UnifiedPushClientTest {
             }
             return providers
         }
+
+        val labels = mutableMapOf<String, CharSequence?>()
+
+        override fun providerLabel(packageName: String): CharSequence? = labels[packageName]
 
         override fun savedDistributor(): String? {
             if (throwOnSaved) {

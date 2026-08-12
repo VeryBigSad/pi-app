@@ -33,6 +33,8 @@ private class WiringClock : AppClock {
 private class WiringCache : CachePort {
     override suspend fun loadTrustState(macId: String): TrustStateEntity? = null
     override suspend fun loadSessions(): List<SessionEntity> = emptyList()
+    override suspend fun loadSession(sessionId: String): SessionEntity? = null
+    override suspend fun upsertSession(session: SessionEntity) = Unit
     override suspend fun loadRecentMessages(sessionId: String, limit: Int): List<MessageEntity> = emptyList()
     override suspend fun messageCount(sessionId: String): Int = 0
     override suspend fun loadOlderMessages(sessionId: String, beforeAppendOrder: String, limit: Int): OlderMessagesPage =
@@ -42,9 +44,10 @@ private class WiringCache : CachePort {
     override suspend fun upsertTrustState(trustState: TrustStateEntity) = Unit
     override suspend fun deleteTrustState(macId: String) = Unit
     override suspend fun markCanonicalUnavailable() = Unit
-    override suspend fun commitFinalizedMessage(session: SessionEntity, message: MessageEntity) = Unit
+    override suspend fun commitCanonicalEvent(session: SessionEntity, finalized: MessageEntity?) = Unit
     override suspend fun replaceSessionSnapshot(session: SessionEntity, messages: List<MessageEntity>) = Unit
     override suspend fun resetSessionContent(session: SessionEntity) = Unit
+    override suspend fun revokeAndPurge(macId: String, revokedAtEpochMs: Long, reasonCode: String) = Unit
     override suspend fun committedCursors(): List<Pair<String, CanonicalAppendCursor>> = emptyList()
     override suspend fun acknowledgeCanonicalResync(signal: CanonicalResyncSignal): Boolean = true
 }
@@ -104,7 +107,7 @@ class AppWiringTest {
             },
             voicePort = object : io.github.verybigsad.pimobile.state.VoicePort {
                 override suspend fun setForeground(foreground: Boolean) = Unit
-                override suspend fun start(): String? = null
+                override suspend fun start(targetSessionId: SessionId): String? = null
                 override suspend fun stop() = Unit
                 override suspend fun cancel() = Unit
                 override suspend fun onMacError(sessionId: String, error: io.github.verybigsad.pimobile.voice.MacVoiceError) = Unit

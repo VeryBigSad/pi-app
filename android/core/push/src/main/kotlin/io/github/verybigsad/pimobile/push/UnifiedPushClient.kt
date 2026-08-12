@@ -7,6 +7,8 @@ import org.unifiedpush.android.connector.UnifiedPush
 internal interface UnifiedPushConnectorPlatform {
     fun distributors(): List<String>
 
+    fun providerLabel(packageName: String): CharSequence?
+
     fun savedDistributor(): String?
 
     fun saveDistributor(packageName: String)
@@ -20,6 +22,12 @@ private class AndroidUnifiedPushConnectorPlatform(context: Context) : UnifiedPus
     private val appContext = context.applicationContext
 
     override fun distributors(): List<String> = UnifiedPush.getDistributors(appContext)
+
+    override fun providerLabel(packageName: String): CharSequence? = runCatching {
+        appContext.packageManager.getApplicationLabel(
+            appContext.packageManager.getApplicationInfo(packageName, 0),
+        )
+    }.getOrNull()
 
     override fun savedDistributor(): String? = UnifiedPush.getSavedDistributor(appContext)
 
@@ -36,6 +44,17 @@ private class AndroidUnifiedPushConnectorPlatform(context: Context) : UnifiedPus
     }
 }
 
+/** A locally installed UnifiedPush distributor suitable for safe settings display. */
+data class UnifiedPushProvider(
+    val packageName: String,
+    val displayName: String,
+) {
+    init {
+        require(packageName.isNotBlank())
+        require(displayName.isNotBlank())
+    }
+}
+
 class UnifiedPushClient internal constructor(
     private val platform: UnifiedPushConnectorPlatform,
 ) {
@@ -46,6 +65,17 @@ class UnifiedPushClient internal constructor(
             UnifiedPushProviderState.ProviderUnavailable(ProviderUnavailableReason.CONNECTOR_ERROR),
         )
         emptyList()
+    }
+
+    /**
+     * Returns locally installed distributors only. Labels are best-effort and sanitized because
+     * they are package-provided text; endpoint data is intentionally never included.
+     */
+    fun availableProviderChoices(): List<UnifiedPushProvider> = availableProviders().map { packageName ->
+        UnifiedPushProvider(
+            packageName = packageName,
+            displayName = safeProviderLabel(platform.providerLabel(packageName), packageName),
+        )
     }
 
     fun refreshProviderState(): UnifiedPushProviderState {
@@ -61,10 +91,10 @@ class UnifiedPushClient internal constructor(
             return UnifiedPushProviderState.ProviderUnavailable(ProviderUnavailableReason.CONNECTOR_ERROR)
                 .also(UnifiedPushRuntime::updateProvider)
         }
-        return if (selected != null && selected in providers) {
-            UnifiedPushProviderState.ProviderSelected(selected)
-        } else {
-            UnifiedPushProviderState.ProviderSelectionRequired(providers.size)
+        return when {
+            selected != null && selected in providers -> UnifiedPushProviderState.ProviderSelected(selected)
+            providers.size == 1 -> selectProvider(providers.single())
+            else -> UnifiedPushProviderState.ProviderSelectionRequired(providers.size)
         }.also(UnifiedPushRuntime::updateProvider)
     }
 
@@ -159,8 +189,16 @@ class UnifiedPushClient internal constructor(
     }
 
     private fun providerList(): Result<List<String>> = runCatching {
-        platform.distributors().distinct().sorted()
+        platform.distributors().filter(String::isNotBlank).distinct().sorted()
     }
+
+    private fun safeProviderLabel(label: CharSequence?, fallback: String): String = label
+        ?.toString()
+        ?.filterNot { it.isISOControl() || it in '\u200B'..'\u200F' || it in '\u202A'..'\u202E' }
+        ?.trim()
+        ?.take(80)
+        ?.takeIf(String::isNotBlank)
+        ?: fallback
 
     companion object {
         const val PUSH_INSTANCE = "pi-mobile-wake-v1"

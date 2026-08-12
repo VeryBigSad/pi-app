@@ -160,12 +160,12 @@ object WireMessages {
             put("decision", if (allow) "allow_once" else "deny")
         }
 
-    fun pushEndpoint(endpointId: String, distributor: String, endpoint: String, wakePublicKey: String): JsonObject =
+    fun pushEndpoint(endpointId: String, distributor: String, endpoint: String, wakePublicKey: String?): JsonObject =
         buildJsonObject {
             put("endpointId", endpointId)
             put("distributor", distributor)
             put("endpoint", endpoint)
-            put("wakePublicKey", wakePublicKey)
+            if (wakePublicKey != null) put("wakePublicKey", wakePublicKey)
         }
 
     fun pushEndpointRevoke(endpointId: String): JsonObject = buildJsonObject {
@@ -179,8 +179,21 @@ object WireMessages {
         put("sampleFormat", "s16le")
     }
 
-    fun streamControl(type: String, streamId: String): JsonObject = buildJsonObject {
-        put("streamId", streamId)
+    fun voiceAudio(streamId: String, chunkSequence: Long, final: Boolean): JsonObject {
+        require(chunkSequence >= 0)
+        return buildJsonObject {
+            put("sessionId", streamId)
+            put("chunkSequence", chunkSequence.toString())
+            put("final", final)
+        }
+    }
+
+    fun voiceCancel(streamId: String, reason: String): JsonObject {
+        require(reason.isNotBlank() && reason.length <= 128)
+        return buildJsonObject {
+            put("streamId", streamId)
+            put("reason", reason)
+        }
     }
 
     fun terminalOpen(sessionId: SessionId, columns: Int, rows: Int): JsonObject = buildJsonObject {
@@ -189,25 +202,23 @@ object WireMessages {
         put("rows", rows)
     }
 
-    fun sessionRef(sessionId: SessionId): JsonObject = buildJsonObject {
-        put("sessionId", sessionId.value)
-    }
-
-    fun terminalResize(sessionId: SessionId, columns: Int, rows: Int): JsonObject = buildJsonObject {
-        put("sessionId", sessionId.value)
+    fun terminalResize(terminalGeneration: ULong, columns: Int, rows: Int): JsonObject = buildJsonObject {
+        put("terminalGeneration", terminalGeneration.toString())
         put("columns", columns)
         put("rows", rows)
     }
 
-    /**
-     * terminal.history.request body (protocol v1): read-only tmux capture bounded to
-     * 5,000 lines / 1 MiB. Adapter note: the request carries no sessionId; it is scoped by
-     * the active terminal generation of this connection.
-     */
-    fun terminalHistoryRequest(terminalGeneration: ULong, maxLines: Int, maxBytes: Int): JsonObject {
+    fun terminalClose(terminalGeneration: ULong, reason: String): JsonObject = buildJsonObject {
+        require(reason.isNotBlank() && reason.length <= 128)
+        put("terminalGeneration", terminalGeneration.toString())
+        put("reason", reason)
+    }
+
+    fun terminalHistoryRequest(sessionId: SessionId, terminalGeneration: ULong, maxLines: Int, maxBytes: Int): JsonObject {
         require(maxLines in 1..5_000)
         require(maxBytes in 1..1_048_576)
         return buildJsonObject {
+            put("sessionId", sessionId.value)
             put("terminalGeneration", terminalGeneration.toString())
             put("maxLines", maxLines)
             put("maxBytes", maxBytes)

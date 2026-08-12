@@ -40,19 +40,29 @@ class TerminalSessionController(
     private val sessionId: SessionId,
     private val connector: () -> HostConnector?,
     private val onClosed: () -> Unit,
+    private val runtimeFactory: (Context, (TerminalEvent) -> Unit) -> TerminalRuntime = { runtimeContext, eventSink ->
+        TerminalRuntime(runtimeContext, onEvent = eventSink)
+    },
 ) : io.github.verybigsad.pimobile.state.TerminalPort {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val mutableState = MutableStateFlow(TerminalUiState())
 
     val state: StateFlow<TerminalUiState> = mutableState.asStateFlow()
 
-    val runtime: TerminalRuntime = TerminalRuntime(context.applicationContext, onEvent = ::onTerminalEvent)
+    val runtime: TerminalRuntime = runtimeFactory(context.applicationContext, ::onTerminalEvent)
 
-    private var inputSequence = 0uL
-    private var outputSequence = 0uL
     private var generation: ULong? = null
+    private var activeTerminalHost: HostConnector? = null
+    private var pageReady = false
+    @Volatile
+    private var terminalStartupFailed = false
+    private var columns = 80
+    private var rows = 24
 
-    fun start(columns: Int = 80, rows: Int = 24) {
+    fun start(columns: Int = this.columns, rows: Int = this.rows) {
+        if (terminalStartupFailed) return
+        this.columns = columns
+        this.rows = rows
         val host = connector()
         if (host == null) {
             mutableState.value = TerminalUiState(TerminalPhase.FAILED, "TERMINAL_NOT_CONNECTED")
@@ -85,7 +95,7 @@ class TerminalSessionController(
         mutableState.value = mutableState.value.copy(historyError = null)
         scope.launch(Dispatchers.IO) {
             runCatching {
-                host.send("terminal.history.request", WireMessages.terminalHistoryRequest(current, maxLines, maxBytes))
+                host.send("terminal.history.request", WireMessages.terminalHistoryRequest(sessionId, current, maxLines, maxBytes))
             }.onFailure {
                 mutableState.value = mutableState.value.copy(historyError = "TERMINAL_HISTORY_REQUEST_FAILED")
             }
@@ -93,18 +103,13 @@ class TerminalSessionController(
     }
 
     override fun onHistoryResult(result: io.github.verybigsad.pimobile.wire.HostConnectionEvent.TerminalHistoryResult) {
-        if (result.terminalGeneration != generation) return
-        val text = result.text
-        if (text == null) {
-            mutableState.value = mutableState.value.copy(historyError = "TERMINAL_HISTORY_REF_UNSUPPORTED")
-            return
-        }
+        if (result.sessionId != sessionId || result.terminalGeneration != generation) return
         scope.launch(Dispatchers.Main) {
             val snapshot = runCatching {
                 io.github.verybigsad.pimobile.terminal.TerminalHistorySnapshot(
                     terminalGeneration = result.terminalGeneration,
                     capturedAt = result.capturedAt,
-                    text = text,
+                    text = result.text,
                     truncatedLines = result.truncatedLines,
                     truncatedBytes = result.truncatedBytes,
                 )
@@ -124,11 +129,20 @@ class TerminalSessionController(
     }
 
     fun onTerminalReady(terminalGeneration: ULong, columns: Int, rows: Int) {
+        if (terminalStartupFailed) return
+        val host = connector()
+        if (host == null || runCatching { host.activateTerminalInput(terminalGeneration) }.isFailure) {
+            mutableState.value = TerminalUiState(TerminalPhase.FAILED, "TERMINAL_INPUT_ACTIVATION_FAILED")
+            return
+        }
         generation = terminalGeneration
-        inputSequence = 0uL
-        outputSequence = 0uL
+        activeTerminalHost = host
+        this.columns = columns
+        this.rows = rows
         scope.launch(Dispatchers.Main) {
+            if (terminalStartupFailed || generation != terminalGeneration) return@launch
             runtime.startGeneration(terminalGeneration)
+            if (terminalStartupFailed || generation != terminalGeneration) return@launch
             mutableState.value = TerminalUiState(TerminalPhase.READY)
         }
     }
@@ -140,6 +154,7 @@ class TerminalSessionController(
 
     fun onTerminalOutput(terminalGeneration: ULong, sequence: ULong, bytes: ByteArray) {
         scope.launch(Dispatchers.Main) {
+            if (terminalStartupFailed) return@launch
             when (runtime.writeOutput(terminalGeneration, sequence, bytes)) {
                 TerminalWriteResult.POSTED_TO_WEBVIEW, TerminalWriteResult.QUEUED_FOR_PAGE -> Unit
                 else -> mutableState.value = TerminalUiState(TerminalPhase.RESETTING)
@@ -148,41 +163,90 @@ class TerminalSessionController(
     }
 
     fun onResetRequired() {
+        if (terminalStartupFailed) return
+        val current = generation
+        val activeHost = activeTerminalHost
         generation = null
+        activeTerminalHost = null
         mutableState.value = TerminalUiState(TerminalPhase.RESETTING)
-        scope.launch {
-            connector()?.send("terminal.reset", WireMessages.sessionRef(sessionId))
+        if (current == null) return
+        runCatching { activeHost?.deactivateTerminalInput(current) }
+        scope.launch(Dispatchers.IO) {
+            val host = activeHost ?: return@launch
+            runCatching {
+                host.send("terminal.close", WireMessages.terminalClose(current, "sequence_gap"))
+                if (!terminalStartupFailed) host.send("terminal.open", WireMessages.terminalOpen(sessionId, columns, rows))
+            }.onFailure {
+                if (!terminalStartupFailed) {
+                    mutableState.value = TerminalUiState(TerminalPhase.FAILED, "TERMINAL_REOPEN_FAILED")
+                }
+            }
+        }
+    }
+
+    private fun failTerminalStartup(errorCode: String) {
+        if (terminalStartupFailed) return
+        terminalStartupFailed = true
+        pageReady = false
+        val current = generation
+        val host = activeTerminalHost
+        generation = null
+        activeTerminalHost = null
+        mutableState.value = TerminalUiState(TerminalPhase.FAILED, errorCode)
+        scope.launch(Dispatchers.Main) { runtime.destroy() }
+        if (current == null) return
+        runCatching { host?.deactivateTerminalInput(current) }
+        scope.launch(Dispatchers.IO) {
+            if (host != null) {
+                runCatching { host.send("terminal.close", WireMessages.terminalClose(current, "runtime_failure")) }
+            }
         }
     }
 
     private fun onTerminalEvent(event: TerminalEvent) {
+        if (terminalStartupFailed) return
         when (event) {
+            TerminalEvent.PageReady -> pageReady = true
             is TerminalEvent.Input -> {
-                val host = connector() ?: return
+                val host = activeTerminalHost ?: return
                 val current = generation ?: return
-                scope.launch(Dispatchers.IO) {
-                    runCatching {
-                        host.sendTerminalInput(current, event.value.sequence, event.value.bytes)
-                    }.onFailure {
-                        mutableState.value = TerminalUiState(TerminalPhase.RESETTING)
+                if (event.value.terminalGeneration != current) {
+                    onResetRequired()
+                    return
+                }
+                val submission = runCatching {
+                    host.submitTerminalInput(current, event.value.bytes)
+                }.getOrElse {
+                    onResetRequired()
+                    return
+                }
+                scope.launch {
+                    runCatching { submission.await() }.onFailure {
+                        if (generation == current) onResetRequired()
                     }
                 }
             }
 
             is TerminalEvent.Resize -> {
-                val host = connector() ?: return
+                val host = activeTerminalHost ?: return
+                val current = generation ?: return
+                columns = event.columns
+                rows = event.rows
                 scope.launch(Dispatchers.IO) {
-                    runCatching { host.send("terminal.resize", WireMessages.terminalResize(sessionId, event.columns, event.rows)) }
+                    runCatching { host.send("terminal.resize", WireMessages.terminalResize(current, event.columns, event.rows)) }
                 }
             }
 
             is TerminalEvent.ResetRequired -> onResetRequired()
             TerminalEvent.HistoryClosed -> mutableState.value = mutableState.value.copy(historyOpen = false)
             is TerminalEvent.RendererGone -> mutableState.value = TerminalUiState(TerminalPhase.RESETTING, "TERMINAL_RENDERER_GONE")
-            is TerminalEvent.Failure -> mutableState.value = TerminalUiState(TerminalPhase.FAILED, event.code)
+            is TerminalEvent.Failure -> {
+                if (!pageReady) failTerminalStartup(event.code)
+                else mutableState.value = TerminalUiState(TerminalPhase.FAILED, event.code)
+            }
             is TerminalEvent.Canary -> {
                 if (!event.result.compatible) {
-                    mutableState.value = TerminalUiState(TerminalPhase.FAILED, event.result.reason ?: "TERMINAL_WEBVIEW_INCOMPATIBLE")
+                    failTerminalStartup(event.result.reason ?: "TERMINAL_WEBVIEW_INCOMPATIBLE")
                 }
             }
 
@@ -191,9 +255,15 @@ class TerminalSessionController(
     }
 
     override fun close() {
-        val host = connector()
+        val current = generation
+        val host = activeTerminalHost
+        generation = null
+        activeTerminalHost = null
+        if (current != null) runCatching { host?.deactivateTerminalInput(current) }
         scope.launch(Dispatchers.IO) {
-            runCatching { host?.send("terminal.close", WireMessages.sessionRef(sessionId)) }
+            if (current != null && host != null) {
+                runCatching { host.send("terminal.close", WireMessages.terminalClose(current, "client_closed")) }
+            }
         }
         scope.launch(Dispatchers.Main) {
             runtime.destroy()

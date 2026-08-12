@@ -1,9 +1,33 @@
 package io.github.verybigsad.pimobile.push
 
 import com.google.common.truth.Truth.assertThat
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Test
 
 class OpaqueWakePayloadTest {
+    @Test
+    fun sharedHostBoundaryFixtureMatchesAndroidContractAndInvalidCasesFailClosed() {
+        val fixture = requireNotNull(javaClass.getResource("/opaque-wake-v1.json")).readText()
+        val root = Json.parseToJsonElement(fixture) as JsonObject
+        val hostPayload = (root.getValue("hostPayload") as JsonPrimitive).content
+
+        assertThat((root.getValue("encoding") as JsonPrimitive).content).isEqualTo("base64url-no-padding")
+        assertThat((root.getValue("minBytes") as JsonPrimitive).content.toInt())
+            .isEqualTo(OpaqueWakePayload.MIN_WAKE_ID_BYTES)
+        assertThat((root.getValue("maxBytes") as JsonPrimitive).content.toInt())
+            .isEqualTo(OpaqueWakePayload.MAX_WAKE_ID_BYTES)
+        assertValid(hostPayload)
+        for (element in root.getValue("invalidPayloads") as JsonArray) {
+            val invalid = element as JsonObject
+            val payload = (invalid.getValue("payload") as JsonPrimitive).content
+            val reason = WakePayloadInvalidReason.valueOf((invalid.getValue("reason") as JsonPrimitive).content)
+            assertInvalid(payload, reason)
+        }
+    }
+
     @Test
     fun acceptsOnlyBoundedBase64UrlWakeIds() {
         val minimum = "A".repeat(OpaqueWakePayload.MIN_WAKE_ID_BYTES)

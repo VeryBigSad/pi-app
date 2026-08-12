@@ -46,7 +46,8 @@ export async function captureCanonicalSnapshot(
       const fence = source.currentEventFence();
       const captured = await source.getEntries();
       validateLeaf(captured.leafId);
-      const lastAppendId = captured.entries.at(-1)?.id;
+      const lastAppendId = captured.entries.at(-1)?.["appendId"];
+      if (lastAppendId !== undefined && typeof lastAppendId !== "string") throw new TypeError("appendId is invalid");
       const validation = lastAppendId === undefined
         ? await source.getEntries()
         : await source.getEntries(lastAppendId);

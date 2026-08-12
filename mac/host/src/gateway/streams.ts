@@ -43,6 +43,7 @@ interface OpenBlob {
 }
 
 interface OpenTerminal {
+  readonly sessionId: string;
   readonly generation: bigint;
   readonly channel: TerminalChannel;
   readonly controller: AbortController;
@@ -139,6 +140,7 @@ export class ContentStreamManager {
 
   async openTerminal(body: JsonObject): Promise<void> {
     if (this.terminal !== undefined) throw new StreamGatewayError("STREAM_INVALID", "Terminal is already open");
+    const sessionId = requiredUuid(body["sessionId"], "terminal.open sessionId");
     const controller = linkedController(this.connectionSignal);
     const terminalRef: { current: OpenTerminal | undefined } = { current: undefined };
     const output: TerminalOutput = {
@@ -183,6 +185,7 @@ export class ContentStreamManager {
       throw new StreamGatewayError("PROTOCOL_VIOLATION", "Terminal generation is invalid");
     }
     terminalRef.current = {
+      sessionId,
       generation: opened.generation,
       channel: opened.channel,
       controller,
@@ -225,14 +228,21 @@ export class ContentStreamManager {
   }
 
   async terminalHistory(body: JsonObject): Promise<void> {
-    if (this.terminalRuntime.history === undefined) throw new StreamGatewayError("PROTOCOL_VIOLATION", "Terminal history is unavailable");
-    const result = await this.terminalRuntime.history(body, this.connectionSignal);
-    await this.sendJson({ type: "terminal.history.result", body: result });
+    const terminal = this.requireTerminal(body);
+    const sessionId = requiredUuid(body["sessionId"], "terminal.history.request sessionId");
+    if (sessionId !== terminal.sessionId || terminal.channel.history === undefined) {
+      throw new StreamGatewayError("TERMINAL_RESET_REQUIRED", "Terminal history capability is unavailable");
+    }
+    const result = await terminal.channel.history(body, terminal.controller.signal);
+    if (result["sessionId"] !== terminal.sessionId || result["terminalGeneration"] !== terminal.generation.toString()) {
+      throw new StreamGatewayError("TERMINAL_RESET_REQUIRED", "Terminal history capability returned stale data");
+    }
+    await this.sendJson({ type: "terminal.history.response", body: result });
   }
 
-  async closeTerminal(reason = "peer_closed"): Promise<void> {
-    const terminal = this.terminal;
-    if (terminal === undefined) return;
+  async closeTerminal(body: JsonObject): Promise<void> {
+    const terminal = this.requireTerminal(body);
+    const reason = boundedString(body["reason"], "terminal.close reason", 128);
     this.terminal = undefined;
     terminal.controller.abort(reason);
     await terminal.channel.close(reason);
@@ -244,7 +254,12 @@ export class ContentStreamManager {
       stream.controller.abort(reason);
       await stream.upload.cancel(reason);
     });
-    cancellations.push(this.closeTerminal(reason));
+    const terminal = this.terminal;
+    if (terminal !== undefined) {
+      this.terminal = undefined;
+      terminal.controller.abort(reason);
+      cancellations.push(terminal.channel.close(reason));
+    }
     await Promise.allSettled(cancellations);
   }
 

@@ -29,6 +29,50 @@ function report(value: object): void {
   window.pimobile?.postMessage(JSON.stringify(value));
 }
 
+interface StyleCanary {
+  propertyAssignment: boolean;
+  styleAttribute: boolean;
+  styleElement: boolean;
+}
+
+function styleCanary(): StyleCanary {
+  const result: StyleCanary = {
+    propertyAssignment: false,
+    styleAttribute: false,
+    styleElement: false,
+  };
+  const propertyProbe = document.createElement("div");
+  const attributeProbe = document.createElement("div");
+  const styleElementProbe = document.createElement("div");
+  const injectedStyle = document.createElement("style");
+  try {
+    propertyProbe.style.position = "fixed";
+    attributeProbe.setAttribute("style", "position: absolute");
+    styleElementProbe.className = "terminal-style-canary";
+    injectedStyle.textContent = ".terminal-style-canary { position: relative !important; }";
+    document.head.append(injectedStyle);
+    document.body.append(propertyProbe, attributeProbe, styleElementProbe);
+    result.propertyAssignment = getComputedStyle(propertyProbe).position === "fixed";
+    result.styleAttribute = getComputedStyle(attributeProbe).position === "absolute";
+    result.styleElement = getComputedStyle(styleElementProbe).position === "relative";
+  } catch {
+  } finally {
+    injectedStyle.remove();
+    propertyProbe.remove();
+    attributeProbe.remove();
+    styleElementProbe.remove();
+  }
+  return result;
+}
+
+function failedStyleCanaryChecks(checks: StyleCanary): string[] {
+  const failures: string[] = [];
+  if (!checks.propertyAssignment) failures.push("PROPERTY_ASSIGNMENT");
+  if (!checks.styleAttribute) failures.push("STYLE_ATTRIBUTE");
+  if (!checks.styleElement) failures.push("STYLE_ELEMENT");
+  return failures;
+}
+
 function cloneCanary(): boolean {
   const source = { enabled: true, nested: [1, "two", null] };
   const clone = structuredClone(source);
@@ -74,6 +118,29 @@ function boot(): void {
   const historyContent = element("terminal-history-content", HTMLPreElement);
   const historyClose = element("terminal-history-close", HTMLButtonElement);
   const encoder = new TextEncoder();
+  const query = new URLSearchParams(window.location.search);
+  const forcedCanaryFailure = query.has("forceCanaryFailure");
+  const forceReadyWithoutCanary = query.has("forceReadyWithoutCanary");
+  const styleChecks = styleCanary();
+  const styleFailures = failedStyleCanaryChecks(styleChecks);
+  if (styleFailures.length > 0) {
+    status.textContent = "Terminal runtime style policy failed. This terminal stays disconnected.";
+    status.dataset.kind = "warning";
+    status.hidden = false;
+    report({
+      type: "terminal.canary",
+      ok: false,
+      error: `TERMINAL_RUNTIME_STYLE_POLICY_FAILED_${styleFailures.join("_")}`,
+      stylePropertyAssignment: styleChecks.propertyAssignment,
+      styleAttribute: styleChecks.styleAttribute,
+      styleElement: styleChecks.styleElement,
+    });
+    return;
+  }
+  if (forceReadyWithoutCanary) {
+    report({ type: "terminal.ready", canaryOk: true });
+    return;
+  }
   const terminal = new Terminal({
     allowProposedApi: true,
     convertEol: false,
@@ -115,7 +182,7 @@ function boot(): void {
   let canaryPassed = false;
   let linkCopyTimeout: number | undefined;
   let viewingScrollback = false;
-  const forcedCanaryFailure = new URLSearchParams(window.location.search).has("forceCanaryFailure");
+  let osc8Suppressed = false;
 
   function showStatus(text: string, kind: "connected" | "disconnected" | "warning"): void {
     status.textContent = text;
@@ -211,6 +278,10 @@ function boot(): void {
     }
   }
 
+  terminal.parser.registerOscHandler(8, () => {
+    osc8Suppressed = true;
+    return true;
+  });
   terminal.onData((data) => {
     if (canaryCapturing) {
       canaryInput += data;
@@ -406,6 +477,9 @@ function boot(): void {
       weakRef: typeof WeakRef === "function",
       resizeObserver: typeof ResizeObserver === "function",
       clone: cloneCanary(),
+      stylePropertyAssignment: styleChecks.propertyAssignment,
+      styleAttribute: styleChecks.styleAttribute,
+      styleElement: styleChecks.styleElement,
       dimensions: terminal.cols === 81 && terminal.rows === 25,
       input: canaryInput.startsWith("x"),
       bracketedPaste: canaryInput.includes("\u001b[200~p\u001b[201~"),
@@ -413,6 +487,7 @@ function boot(): void {
       wide,
       combining,
       truecolor,
+      osc8Suppressed,
     };
     const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name.toUpperCase());
     if (forcedCanaryFailure) failedChecks.push("FORCED");
@@ -427,12 +502,16 @@ function boot(): void {
       hasWeakRef: typeof WeakRef === "function",
       hasStructuredClone: typeof structuredClone === "function",
       narrowStructuredClone: installedNarrowStructuredClone,
+      stylePropertyAssignment: checks.stylePropertyAssignment,
+      styleAttribute: checks.styleAttribute,
+      styleElement: checks.styleElement,
       wide,
       combining,
       truecolor,
       keyRelease: canaryInput.includes(":3u"),
       bracketedPaste: canaryInput.includes("\u001b[200~p\u001b[201~"),
       osc8: rendered.includes("TC L"),
+      osc8Suppressed: checks.osc8Suppressed,
       binaryBridge: typeof ArrayBuffer === "function" ? "array-buffer-or-base64" : "base64",
     });
     if (!ok) {

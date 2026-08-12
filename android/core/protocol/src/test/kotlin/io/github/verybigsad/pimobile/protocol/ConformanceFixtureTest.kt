@@ -33,6 +33,20 @@ class ConformanceFixtureTest {
     }
 
     @Test
+    fun voicePcmOrderingFormatBoundariesConsumeSharedFixtures() {
+        corpus.getValue("voiceStreamCases").jsonArray.forEach { element ->
+            val fixture = element.jsonObject
+            assertValidity(fixture.valid()) {
+                val stream = VoicePcmStream("550e8400-e29b-41d4-a716-446655440001")
+                fixture.getValue("frames").jsonArray.forEach { stream.acceptVoiceFrame(it.jsonObject) }
+                fixture.getValue("boundaries").jsonArray.forEach { stream.acceptVoiceBoundary(it.jsonObject) }
+                fixture.getValue("moreFrames").jsonArray.forEach { stream.acceptVoiceFrame(it.jsonObject) }
+                fixture["finalBoundary"]?.jsonObject?.let { stream.acceptVoiceBoundary(it) }
+            }
+        }
+    }
+
+    @Test
     fun pairingCeremonyBindingsConsumeSharedFixtures() {
         corpus.getValue("pairingBindingCases").jsonArray.forEach { element ->
             val fixture = element.jsonObject
@@ -224,6 +238,16 @@ class ConformanceFixtureTest {
     }
 
     private fun ContiguousStream.accept(chunk: StreamChunk) = accept(chunk.streamId, chunk.sequence, chunk.offset, chunk.data)
+
+    private fun VoicePcmStream.acceptVoiceFrame(frame: JsonObject) {
+        val data = frame["dataBytes"]?.jsonPrimitive?.content?.toInt()?.let(::ByteArray)
+            ?: hexToBytes(frame.string("dataHex"))
+        accept(frame.string("streamId"), frame.getValue("sequence").jsonPrimitive.content.toLong(), frame.string("offset").toULong(), data)
+    }
+
+    private fun VoicePcmStream.acceptVoiceBoundary(value: JsonObject) {
+        boundary(value.string("streamId"), value.string("chunkSequence"), value.boolean("final"))
+    }
 
     private fun JsonObject.streamChunk() = StreamChunk(
         string("streamId"),

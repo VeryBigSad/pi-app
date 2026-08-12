@@ -109,14 +109,35 @@ data class SecuritySettingsUiState(
 // ---------------------------------------------------------------------------
 
 @Immutable
+data class PushDistributorOption(
+    val packageName: String,
+    val label: String,
+) {
+    init {
+        require(packageName.isNotBlank())
+        require(label.isNotBlank())
+    }
+}
+
+@Immutable
 sealed interface PushDistributorState {
     data object Unavailable : PushDistributorState
 
+    /** No compatible UnifiedPush distributor is installed. */
     data object NoneInstalled : PushDistributorState
+
+    /** Installed distributors exist but the user must choose one explicitly. */
+    data class SelectionRequired(val options: List<PushDistributorOption>) : PushDistributorState {
+        init {
+            require(options.isNotEmpty())
+            require(options.map(PushDistributorOption::packageName).distinct().size == options.size)
+        }
+    }
 
     data class Available(
         val distributorName: String,
         val connected: Boolean,
+        val alternatives: List<PushDistributorOption> = emptyList(),
     ) : PushDistributorState {
         init {
             require(distributorName.isNotBlank())
@@ -126,8 +147,10 @@ sealed interface PushDistributorState {
 
 enum class EndpointRegistrationState {
     UNKNOWN,
+    REGISTRATION_REQUESTED,
     REGISTERED,
     NOT_REGISTERED,
+    FAILED,
 }
 
 enum class NotificationPermissionState {
@@ -295,6 +318,9 @@ data class SettingsActions(
     val onOpenChannelSettings: (channelId: String) -> Unit = {},
     val onOpenAppNotificationSettings: () -> Unit = {},
     val onRequestNotificationPermission: () -> Unit = {},
+    val onSelectPushDistributor: (packageName: String) -> Unit = {},
+    val onRequestPushRegistration: () -> Unit = {},
+    val onUnregisterPush: () -> Unit = {},
     val onCheckForUpdates: () -> Unit = {},
     val onOpenUpdateSheet: () -> Unit = {},
     val onOpenLicenses: () -> Unit = {},

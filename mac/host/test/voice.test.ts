@@ -1,10 +1,10 @@
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { chmodSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { GroqTranscriber, VoiceError, parseRetryAfter } from "../src/voice/groq-client.js";
 import { DEFAULT_VOICE_LIMITS, VoiceRateLedger, type VoiceLimits } from "../src/voice/rate-ledger.js";
-import { VadChunker } from "../src/voice/vad-chunker.js";
 import { TranscriptionQueue } from "../src/voice/transcription-queue.js";
 
 function path(name: string): string {
@@ -14,9 +14,6 @@ function path(name: string): string {
 function limits(overrides: Partial<VoiceLimits>): VoiceLimits {
   return { ...DEFAULT_VOICE_LIMITS, ...overrides };
 }
-
-const speech = new Int16Array(320).fill(2_000);
-const silence = new Int16Array(320);
 
 describe("durable voice accounting", () => {
   it("bills every attempt for at least ten seconds and persists", () => {
@@ -49,33 +46,67 @@ describe("durable voice accounting", () => {
 });
 
 describe("voice ledger clock robustness", () => {
-  it("tolerates a backward clock jump without locking windows or losing history", () => {
-    const base = Date.UTC(2026, 5, 10, 12);
-    const ledger = new VoiceRateLedger(path("voice.db"), limits({ requestsPerMinute: 1 }));
-    expect(ledger.reserve("a", 1, base).allowed).toBe(true);
-    const jumped = ledger.reserve("b", 1, base - 10 * 60 * 1_000);
-    expect(jumped.allowed).toBe(true);
-    expect(ledger.totals(base).attempts).toBe(2);
-    const denied = ledger.reserve("c", 1, base + 1_000);
-    expect(denied).toMatchObject({ allowed: false, code: "VOICE_RPM_LIMIT", resetAtMs: base + 60_000 });
+  const base = Date.UTC(2026, 5, 10, 12);
+  const roomy = {
+    requestsPerMinute: 100,
+    requestsPerDay: 100,
+    audioSecondsPerHour: 100,
+    audioSecondsPerDay: 100,
+    usdPerUtcDay: 100,
+    usdPerUtcMonth: 100,
+  };
+  const attemptCost = 10 / 3_600 * DEFAULT_VOICE_LIMITS.usdPerBilledHour;
+
+  it("fills every window and budget, then denies after wall-clock rollback without losing cost", () => {
+    const cases: { readonly code: string; readonly overrides: Partial<VoiceLimits> }[] = [
+      { code: "VOICE_RPM_LIMIT", overrides: { ...roomy, requestsPerMinute: 2 } },
+      { code: "VOICE_RPD_LIMIT", overrides: { ...roomy, requestsPerDay: 2 } },
+      { code: "VOICE_ASH_LIMIT", overrides: { ...roomy, audioSecondsPerHour: 2 } },
+      { code: "VOICE_ASD_LIMIT", overrides: { ...roomy, audioSecondsPerDay: 2 } },
+      { code: "VOICE_DAILY_BUDGET", overrides: { ...roomy, usdPerUtcDay: 2 * attemptCost } },
+      { code: "VOICE_MONTHLY_BUDGET", overrides: { ...roomy, usdPerUtcMonth: 2 * attemptCost } },
+    ];
+    for (const [index, scenario] of cases.entries()) {
+      const ledger = new VoiceRateLedger(path(`voice-${String(index)}.db`), limits(scenario.overrides));
+      expect(ledger.reserve("a", 1, base).allowed).toBe(true);
+      expect(ledger.reserve("b", 1, base + 1).allowed).toBe(true);
+      expect(ledger.reserve("rollback", 1, base - 40 * 24 * 60 * 60 * 1_000)).toMatchObject({ allowed: false, code: scenario.code });
+      expect(ledger.totals(base - 1)).toMatchObject({ attempts: 2, encodedSeconds: 2, billedSeconds: 20 });
+      expect(ledger.totals(base).estimatedUsd).toBeCloseTo(2 * attemptCost, 12);
+      ledger.close();
+    }
+  });
+
+  it("persists the effective-time high-water mark across restart", () => {
+    const database = path("voice.db");
+    let ledger = new VoiceRateLedger(database, limits({ ...roomy, requestsPerMinute: 1 }));
+    expect(ledger.reserve("fill", 1, base).allowed).toBe(true);
+    ledger.close();
+    ledger = new VoiceRateLedger(database, limits({ ...roomy, requestsPerMinute: 1 }));
+    expect(ledger.reserve("rollback", 1, base - 60_000)).toEqual({ allowed: false, code: "VOICE_RPM_LIMIT", resetAtMs: base + 60_000 });
+    expect(ledger.totals(base - 60_000)).toMatchObject({ attempts: 1, encodedSeconds: 1, billedSeconds: 10 });
     ledger.close();
   });
 
-  it("tolerates a forward clock jump without deleting quota history", () => {
-    const base = Date.UTC(2026, 5, 10, 12);
-    const ledger = new VoiceRateLedger(path("voice.db"), limits({ requestsPerMinute: 1 }));
-    expect(ledger.reserve("a", 1, base).allowed).toBe(true);
-    expect(ledger.reserve("b", 1, base + 40 * 24 * 60 * 60 * 1_000).allowed).toBe(true);
-    expect(ledger.totals(base).attempts).toBe(1);
+  it("serializes concurrent rollback reservations across database connections", async () => {
+    const database = path("voice.db");
+    const configured = limits({ ...roomy, requestsPerMinute: 1 });
+    const ledger = new VoiceRateLedger(database, configured);
+    expect(ledger.reserve("fill", 1, base).allowed).toBe(true);
     ledger.close();
+    const results = await Promise.all(Array.from({ length: 4 }, (_, index) => reserveInChild(database, configured, `rollback-${String(index)}`, base - 60_000)));
+    expect(results).toEqual(Array.from({ length: 4 }, () => ({ allowed: false, code: "VOICE_RPM_LIMIT", resetAtMs: base + 60_000 })));
+    const reopened = new VoiceRateLedger(database, configured);
+    expect(reopened.totals(base - 60_000).attempts).toBe(1);
+    reopened.close();
   });
 
-  it("ignores future rows instead of locking windows until a future reset", () => {
-    const base = Date.UTC(2026, 5, 10, 12);
-    const ledger = new VoiceRateLedger(path("voice.db"), limits({ requestsPerMinute: 1 }));
-    expect(ledger.reserve("past", 1, base).allowed).toBe(true);
-    expect(ledger.reserve("skewed", 1, base + 3_600_000).allowed).toBe(true);
-    expect(ledger.reserve("corrected", 1, base + 61_000).allowed).toBe(true);
+  it("pins a forward jump so a later correction cannot reopen limits", () => {
+    const ledger = new VoiceRateLedger(path("voice.db"), limits({ ...roomy, requestsPerMinute: 1 }));
+    const forward = base + 40 * 24 * 60 * 60 * 1_000;
+    expect(ledger.reserve("before", 1, base).allowed).toBe(true);
+    expect(ledger.reserve("forward", 1, forward).allowed).toBe(true);
+    expect(ledger.reserve("corrected", 1, base + 61_000)).toEqual({ allowed: false, code: "VOICE_RPM_LIMIT", resetAtMs: forward + 60_000 });
     expect(ledger.totals(base).attempts).toBe(1);
     ledger.close();
   });
@@ -117,6 +148,25 @@ describe("Groq transport", () => {
     ledger.close();
   });
 
+  it("rejects symlinked, non-0600, and oversized key files before quota", async () => {
+    const target = path("target-key");
+    writeFileSync(target, "gsk_abcdefghijklmnopqrstuvwxyz\n", { mode: 0o600 });
+    const symlink = path("linked-key");
+    symlinkSync(target, symlink);
+    const strict = path("strict-key");
+    writeFileSync(strict, "gsk_abcdefghijklmnopqrstuvwxyz\n", { mode: 0o600 });
+    chmodSync(strict, 0o400);
+    const oversized = path("oversized-key");
+    writeFileSync(oversized, "x".repeat(4_097), { mode: 0o600 });
+    const ledger = new VoiceRateLedger(path("voice.db"));
+    for (const keyPath of [symlink, strict, oversized]) {
+      const client = new GroqTranscriber({ ledger, keyPath, fetch: () => Promise.resolve(Response.json({ text: "bad" })) });
+      await expect(client.transcribe(keyPath, Buffer.alloc(32_000))).rejects.toBeInstanceOf(VoiceError);
+    }
+    expect(ledger.totals(Date.now()).attempts).toBe(0);
+    ledger.close();
+  });
+
   it("parses both Retry-After forms", () => {
     expect(parseRetryAfter("1.5", 0)).toBe(1_500);
     expect(parseRetryAfter("Thu, 01 Jan 1970 00:00:05 GMT", 2_000)).toBe(3_000);
@@ -153,76 +203,38 @@ describe("transcription queue", () => {
     expect(maximum).toBe(1);
   });
 
-  it("cancels active and queued work", async () => {
+  it("cancels active and queued work and suppresses late active completion", async () => {
+    let finishActive: ((text: string) => void) | undefined;
+    const started: string[] = [];
     const queue = new TranscriptionQueue({
-      transcribe: (_id, _pcm, signal) => new Promise((_resolve, reject) => signal?.addEventListener("abort", () => reject(new VoiceError("VOICE_CANCELED", "canceled")), { once: true })),
+      transcribe: (id) => {
+        started.push(id);
+        return new Promise<string>((resolve) => { finishActive = resolve; });
+      },
     });
     const active = queue.submit("active", Buffer.alloc(2));
     const queued = queue.submit("queued", Buffer.alloc(2));
     queue.cancelAll();
     await expect(active).rejects.toMatchObject({ code: "VOICE_CANCELED" });
     await expect(queued).rejects.toMatchObject({ code: "VOICE_CANCELED" });
+    finishActive?.("late");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(started).toEqual(["active"]);
+    expect(queue.size).toBe(0);
   });
 });
 
-describe("VAD chunking", () => {
-  it("keeps pre-roll and prefers a silence boundary after eight seconds", () => {
-    const vad = new VadChunker();
-    for (let index = 0; index < 15; index += 1) expect(vad.push(silence)).toEqual([]);
-    for (let index = 0; index < 385; index += 1) expect(vad.push(speech)).toEqual([]);
-    let chunks = [] as ReturnType<VadChunker["push"]>;
-    for (let index = 0; index < 10; index += 1) chunks = vad.push(silence);
-    expect(chunks).toHaveLength(1);
-    expect(chunks[0]?.encodedSeconds).toBe(8.2);
+function reserveInChild(database: string, configured: VoiceLimits, chunkId: string, nowMs: number): Promise<unknown> {
+  const moduleUrl = new URL("../src/voice/rate-ledger.ts", import.meta.url).href;
+  const script = `import { VoiceRateLedger } from ${JSON.stringify(moduleUrl)}; const ledger = new VoiceRateLedger(process.argv[1], JSON.parse(process.argv[2])); const result = ledger.reserve(process.argv[3], 1, Number(process.argv[4])); ledger.close(); process.stdout.write(JSON.stringify(result));`;
+  return new Promise((resolve, reject) => {
+    execFile(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script, database, JSON.stringify(configured), chunkId, String(nowMs)], (error, stdout, stderr) => {
+      if (error !== null) {
+        reject(new Error(`voice ledger child failed: ${stderr}`, { cause: error }));
+        return;
+      }
+      resolve(JSON.parse(stdout) as unknown);
+    });
   });
-
-  it("forces chunks at twelve seconds with bounded overlap", () => {
-    const vad = new VadChunker();
-    const chunks = [] as ReturnType<VadChunker["push"]>;
-    for (let index = 0; index < 1_200; index += 1) chunks.push(...vad.push(speech));
-    expect(chunks).toHaveLength(2);
-    expect(chunks.every((chunk) => chunk.encodedSeconds <= 12)).toBe(true);
-    expect(chunks[1]?.pcm16le.subarray(0, 640)).toEqual(chunks[0]?.pcm16le.subarray(-640));
-  });
-
-  it("flushes a final chunk after a silence-boundary emission exactly once", () => {
-    const vad = new VadChunker();
-    const chunks = [] as ReturnType<VadChunker["push"]>;
-    for (let index = 0; index < 400; index += 1) chunks.push(...vad.push(speech));
-    for (let index = 0; index < 10; index += 1) chunks.push(...vad.push(silence));
-    expect(chunks).toHaveLength(1);
-    expect(chunks[0]).toMatchObject({ sequence: 0, final: false, encodedSeconds: 8.2 });
-    const flushed = vad.finish();
-    expect(flushed).toHaveLength(1);
-    expect(flushed[0]).toMatchObject({ sequence: 1, final: true });
-    expect(vad.finish()).toEqual([]);
-  });
-
-  it("does not reflush forced-boundary overlap without new audio", () => {
-    const vad = new VadChunker();
-    const chunks = [] as ReturnType<VadChunker["push"]>;
-    for (let index = 0; index < 600; index += 1) chunks.push(...vad.push(speech));
-    expect(chunks).toHaveLength(1);
-    expect(chunks[0]?.final).toBe(false);
-    expect(vad.finish()).toEqual([]);
-  });
-
-  it("includes forced-boundary overlap when new audio follows", () => {
-    const vad = new VadChunker();
-    const chunks = [] as ReturnType<VadChunker["push"]>;
-    for (let index = 0; index < 600; index += 1) chunks.push(...vad.push(speech));
-    for (let index = 0; index < 5; index += 1) expect(vad.push(speech)).toEqual([]);
-    const flushed = vad.finish();
-    expect(flushed).toHaveLength(1);
-    expect(flushed[0]).toMatchObject({ sequence: 1, final: true, encodedSeconds: 0.6 });
-    expect(flushed[0]?.pcm16le.subarray(0, 16_000)).toEqual(chunks[0]?.pcm16le.subarray(-16_000));
-  });
-
-  it("cancel discards an open utterance so finish stays empty", () => {
-    const vad = new VadChunker();
-    for (let index = 0; index < 400; index += 1) vad.push(speech);
-    for (let index = 0; index < 10; index += 1) vad.push(silence);
-    vad.cancel();
-    expect(vad.finish()).toEqual([]);
-  });
-});
+}

@@ -201,6 +201,9 @@ class EncryptedCacheTest {
             lastAppendId = "append-1",
         ),
         updatedAtEpochMs = 1,
+        repositoryPath = "/tmp/repository",
+        worktreePath = "/tmp/repository/.worktrees/feature",
+        parentSessionId = "parent-session",
     )
 
     private fun message(sessionId: String): MessageEntity {

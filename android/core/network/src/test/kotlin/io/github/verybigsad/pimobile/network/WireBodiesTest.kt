@@ -139,6 +139,79 @@ class WireBodiesTest {
     }
 
     @Test
+    fun sessionCatalogParsesSixNormalizedHostEntriesWithoutChangingIds() {
+        val ids = (0 until 6).map { index -> "550e8400-e29b-41d4-a716-44665544004$index" }
+        val body = JsonObject(
+            mapOf(
+                "sessions" to kotlinx.serialization.json.JsonArray(
+                    ids.map { id ->
+                        catalogEntry(
+                            mapOf(
+                                "sessionId" to JsonPrimitive(id),
+                                "provider" to JsonPrimitive("unavailable"),
+                                "model" to JsonPrimitive("unavailable"),
+                                "thinkingLevel" to JsonPrimitive("unavailable"),
+                                "repo" to JsonPrimitive("/host/sessions/$id"),
+                                "cwd" to JsonPrimitive("/host/sessions/$id"),
+                            ),
+                        )
+                    },
+                ),
+            ),
+        )
+
+        val parsed = WireBodies.parseSessionCatalog(body)
+        assertThat(parsed.sessions.map { it.id.value }).containsExactlyElementsIn(ids).inOrder()
+        assertThat(parsed.sessions).hasSize(6)
+        assertThat(parsed.sessions.all { it.provider == "unavailable" && it.parentSessionId == null }).isTrue()
+    }
+
+    @Test
+    fun sessionCatalogRejectsEveryMissingOrMalformedWireField() {
+        val required = listOf(
+            "sessionId",
+            "provider",
+            "model",
+            "thinkingLevel",
+            "repo",
+            "cwd",
+            "createdAt",
+            "updatedAt",
+        )
+        for (field in required) {
+            val missing = JsonObject(catalogEntry().filterKeys { it != field })
+            val result = runCatching { WireBodies.parseSessionCatalog(catalogBody(missing)) }
+            assertWithMessage("missing $field").that(result.isFailure).isTrue()
+        }
+
+        val malformed = listOf(
+            "sessionId" to JsonPrimitive("not-a-uuid"),
+            "provider" to JsonPrimitive(""),
+            "provider" to JsonPrimitive("p".repeat(65)),
+            "model" to JsonPrimitive(""),
+            "model" to JsonPrimitive("m".repeat(129)),
+            "thinkingLevel" to JsonPrimitive(""),
+            "thinkingLevel" to JsonPrimitive("t".repeat(33)),
+            "repo" to JsonPrimitive(""),
+            "repo" to JsonPrimitive("é".repeat(2_049)),
+            "worktree" to JsonPrimitive(""),
+            "worktree" to JsonPrimitive("w".repeat(4_097)),
+            "cwd" to JsonPrimitive(""),
+            "cwd" to JsonPrimitive("c".repeat(4_097)),
+            "parentId" to JsonPrimitive("not-a-uuid"),
+            "parentId" to JsonPrimitive("550e8400-e29b-41d4-a716-446655440002"),
+            "createdAt" to JsonPrimitive("not-a-date"),
+            "createdAt" to JsonPrimitive("d".repeat(65)),
+            "updatedAt" to JsonPrimitive("not-a-date"),
+            "updatedAt" to JsonPrimitive("d".repeat(65)),
+        )
+        for ((field, value) in malformed) {
+            val result = runCatching { WireBodies.parseSessionCatalog(catalogBody(catalogEntry(mapOf(field to value)))) }
+            assertWithMessage("malformed $field").that(result.isFailure).isTrue()
+        }
+    }
+
+    @Test
     fun snapshotBoundsExposeAppendIdsAndLeaf() {
         val begin = WireBodies.parseSnapshotBegin(
             JsonObject(
@@ -172,8 +245,9 @@ class WireBodiesTest {
     fun terminalHistoryRequestRoundTripsThroughCodec() {
         val request = WireBodies.TerminalHistoryRequest(
             sessionId = SessionId("550e8400-e29b-41d4-a716-446655440002"),
-            beforeSequence = null,
-            limit = 500,
+            terminalGeneration = Uint64Decimal("18446744073709551615"),
+            maxLines = 500,
+            maxBytes = 1_024,
         )
         val encoded = WireBodies.encodeTerminalHistoryRequest(request)
         assertThat(WireBodies.parseTerminalHistoryRequest(encoded)).isEqualTo(request)
@@ -182,15 +256,18 @@ class WireBodiesTest {
             JsonObject(
                 mapOf(
                     "sessionId" to JsonPrimitive("550e8400-e29b-41d4-a716-446655440002"),
-                    "entries" to kotlinx.serialization.json.JsonArray(
-                        listOf(JsonPrimitive("line one"), JsonPrimitive("line two")),
-                    ),
-                    "truncated" to JsonPrimitive(false),
+                    "terminalGeneration" to JsonPrimitive("18446744073709551615"),
+                    "capturedAt" to JsonPrimitive("2026-08-09T12:00:00Z"),
+                    "text" to JsonPrimitive("line one\nline two"),
+                    "truncatedLines" to JsonPrimitive(false),
+                    "truncatedBytes" to JsonPrimitive(true),
                 ),
             ),
         )
-        assertThat(response.entries).containsExactly("line one", "line two").inOrder()
-        assertThat(response.truncated).isFalse()
+        assertThat(response.terminalGeneration).isEqualTo(Uint64Decimal("18446744073709551615"))
+        assertThat(response.text).isEqualTo("line one\nline two")
+        assertThat(response.truncatedLines).isFalse()
+        assertThat(response.truncatedBytes).isTrue()
     }
 
     @Test
@@ -301,6 +378,25 @@ class WireBodiesTest {
         }
         assertThat(overChars.isFailure).isTrue()
     }
+
+    private fun catalogBody(entry: JsonObject): JsonObject = JsonObject(
+        mapOf("sessions" to kotlinx.serialization.json.JsonArray(listOf(entry))),
+    )
+
+    private fun catalogEntry(overrides: Map<String, kotlinx.serialization.json.JsonElement> = emptyMap()): JsonObject = JsonObject(
+        mapOf(
+            "sessionId" to JsonPrimitive("550e8400-e29b-41d4-a716-446655440002"),
+            "provider" to JsonPrimitive("openai"),
+            "model" to JsonPrimitive("gpt-5"),
+            "thinkingLevel" to JsonPrimitive("high"),
+            "repo" to JsonPrimitive("/work/pi-app"),
+            "worktree" to kotlinx.serialization.json.JsonNull,
+            "cwd" to JsonPrimitive("/work/pi-app"),
+            "parentId" to kotlinx.serialization.json.JsonNull,
+            "createdAt" to JsonPrimitive("2026-08-09T10:00:00Z"),
+            "updatedAt" to JsonPrimitive("2026-08-09T11:00:00Z"),
+        ) + overrides,
+    )
 
     private fun parse(type: String, body: JsonObject): Any = when (type) {
         "auth.result" -> WireBodies.parseAuthResult(body)

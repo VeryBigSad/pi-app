@@ -36,7 +36,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
-          go-version: 1.26.2
+          go-version: 1.26.5
           cache-dependency-path: relay/go.sum
       - working-directory: relay
         run: go test -race ./...
@@ -119,7 +119,6 @@ jobs:
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
           CERTIFICATE_IDENTITY: ${{ github.server_url }}/${{ github.repository }}/.github/workflows/relay-image.yml@${{ github.ref }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cosign verify \
             --certificate-identity "$CERTIFICATE_IDENTITY" \
@@ -147,25 +146,20 @@ jobs:
           for id in $ids; do
             gh api -X DELETE "/user/packages/container/$package/versions/$id"
           done
-      - run: docker logout ghcr.io
-      - env:
+      - name: Verify promoted private image
+        env:
           DIGEST: ${{ steps.build.outputs.digest }}
           CERTIFICATE_IDENTITY: ${{ github.server_url }}/${{ github.repository }}/.github/workflows/relay-image.yml@${{ github.ref }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           docker image rm "$IMAGE@$DIGEST" >/dev/null 2>&1 || true
-          if ! docker pull "$IMAGE:$RELEASE_TAG"; then
-            # Runtime pulls use the private YC Container Registry; GHCR is public provenance
-            # only. Warn instead of failing while the GHCR package is private.
-            printf '::warning::GHCR package is not anonymously pullable; provenance pull unavailable until the package is public.\n'
-            docker login ghcr.io -u "$GITHUB_ACTOR" --password "$GHCR_TOKEN" >/dev/null
-            docker pull "$IMAGE:$RELEASE_TAG"
-            docker logout ghcr.io >/dev/null
-          fi
+          docker pull "$IMAGE:$RELEASE_TAG"
           test "$(docker image inspect --format '{{.RepoDigests}}' "$IMAGE:$RELEASE_TAG")" = "[$IMAGE@$DIGEST]"
           cosign verify \
             --certificate-identity "$CERTIFICATE_IDENTITY" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             "$IMAGE@$DIGEST" >/dev/null
           printf "Deploy digest: \`%s@%s\`\n" "$IMAGE" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+      - name: Logout from GHCR
+        if: ${{ always() }}
+        run: docker logout ghcr.io

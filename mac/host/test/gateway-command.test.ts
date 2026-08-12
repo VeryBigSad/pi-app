@@ -5,6 +5,7 @@ import { commandPayloadHash, type JsonObject } from "@pimobile/protocol";
 import { describe, expect, it } from "vitest";
 import {
   AtMostOnceCommandDispatcher,
+  CommandDispatchRejectedError,
   type CommandExecutionContext,
 } from "../src/gateway/command-dispatch.js";
 import type { GatewayClock } from "../src/gateway/types.js";
@@ -234,6 +235,23 @@ describe("gateway at-most-once command dispatch", () => {
       dispatched: false,
     });
     expect(dispatches).toBe(0);
+    store.close();
+  });
+
+  it("journals an explicit Pi RPC rejection as REJECTED rather than ACKED", async () => {
+    const store = journal();
+    const dispatcher = new AtMostOnceCommandDispatcher(
+      store,
+      { authorize: () => Promise.resolve(authorization()) },
+      { capture: () => ({ generation: 1, dispatch: () => Promise.reject(new CommandDispatchRejectedError("PI_RPC_REJECTED")) }) },
+      clock,
+    );
+
+    expect(await dispatcher.submit(body(), context(), new AbortController().signal)).toMatchObject({
+      record: { state: "REJECTED", errorCode: "PI_RPC_REJECTED" },
+      dispatched: true,
+    });
+    expect((await store.get(commandId))?.state).toBe("REJECTED");
     store.close();
   });
 

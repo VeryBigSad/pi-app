@@ -222,6 +222,48 @@ object StorageMigrations {
         }
     }
 
+    val MIGRATION_3_4: Migration = object : Migration(3, 4) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `sessions_v4` (
+                    `sessionId` TEXT NOT NULL,
+                    `cwd` TEXT NOT NULL,
+                    `displayName` TEXT,
+                    `provider` TEXT NOT NULL,
+                    `modelId` TEXT NOT NULL,
+                    `thinkingLevel` TEXT NOT NULL,
+                    `updatedAtEpochMs` INTEGER NOT NULL,
+                    `canonical_stream_epoch` TEXT,
+                    `canonical_sequence` TEXT CHECK (${canonicalUint64Check("canonical_sequence", nullable = true)}),
+                    `canonical_leaf_id` TEXT,
+                    `canonical_last_append_id` TEXT,
+                    `repositoryPath` TEXT NOT NULL,
+                    `worktreePath` TEXT NOT NULL,
+                    `parentSessionId` TEXT,
+                    PRIMARY KEY(`sessionId`)
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                """
+                INSERT INTO `sessions_v4` (
+                    `sessionId`, `cwd`, `displayName`, `provider`, `modelId`, `thinkingLevel`,
+                    `updatedAtEpochMs`, `canonical_stream_epoch`, `canonical_sequence`,
+                    `canonical_leaf_id`, `canonical_last_append_id`, `repositoryPath`,
+                    `worktreePath`, `parentSessionId`
+                )
+                SELECT `sessionId`, `cwd`, `displayName`, `provider`, `modelId`, `thinkingLevel`,
+                    `updatedAtEpochMs`, `canonical_stream_epoch`, `canonical_sequence`,
+                    `canonical_leaf_id`, `canonical_last_append_id`, `cwd`, `cwd`, NULL
+                FROM `sessions`
+                """.trimIndent(),
+            )
+            db.execSQL("DROP TABLE `sessions`")
+            db.execSQL("ALTER TABLE `sessions_v4` RENAME TO `sessions`")
+        }
+    }
+
     private fun canonicalUint64Check(column: String, nullable: Boolean): String {
         val positive =
             "LENGTH(`$column`) >= 1 AND LENGTH(`$column`) <= 20 " +

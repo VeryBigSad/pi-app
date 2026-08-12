@@ -6,9 +6,11 @@ import {
   MAX_FRAME_PAYLOAD_BYTES,
   MAX_JSON_PAYLOAD_BYTES,
   assertEnvelope,
+  assertWireMessage,
   createEnvelope,
   decodeJsonPayload,
   encodeJsonPayload,
+  isJsonObject,
   type Envelope,
   type JsonObject,
 } from "@pimobile/protocol";
@@ -18,6 +20,7 @@ import { deferredVoid } from "./deferred.js";
 import { BoundedFrameReader, BoundedFrameWriter } from "./framing.js";
 import { ContentStreamManager, StreamGatewayError } from "./streams.js";
 import { CanonicalSyncSequencer, SyncSequenceError } from "./sync-sequencer.js";
+import { VoiceStreamManager } from "./voice-stream.js";
 import type {
   CompleteUserVerification,
   ConnectionPhase,
@@ -33,8 +36,6 @@ import type {
   VerifiedTransportAdmission,
   VerifiedUserAuthentication,
   VerifiedUserIdentity,
-  VoiceAudioChunk,
-  VoiceTranscriptSink,
 } from "./types.js";
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -67,12 +68,23 @@ const READY_ONLY = new Set([
   "terminal.open",
   "terminal.resize",
   "voice.audio",
+  "voice.cancel",
+  "voice.start",
 ]);
 const DEFAULT_PASSKEY_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const MAX_PASSKEY_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const MAX_VOICE_CHUNK_BYTES = 30 * 16_000 * 2;
-const MAX_VOICE_CHUNK_SEQUENCE = 1_048_575;
-const BASE64URL = /^[A-Za-z0-9_-]+$/;
+const MAX_DEFERRED_SYNC_EVENTS = 4_096;
+const SYNC_BUFFERED_TYPES = new Set(["session.catalog", "agents.catalog", "agents.update", "event.batch", "message.append"]);
+const CONFORMED_OUTBOUND_TYPES = new Set([
+  "sync.complete",
+  "message.append",
+  "session.settled",
+  "session.catalog",
+  "agents.catalog",
+  "agents.update",
+  "snapshot.begin",
+  "snapshot.end",
+]);
 const CLOSE_CODES = new Set([
   "AUTH_FAILED",
   "COMMAND_ID_REUSE",
@@ -160,12 +172,19 @@ class GatewayConnectionImpl implements GatewayConnection {
   private readonly pairingContext: PairingContext | undefined;
   private readonly sync: CanonicalSyncSequencer;
   private readonly streams: ContentStreamManager;
+  private readonly voice: VoiceStreamManager;
   private user: VerifiedUserAuthentication | undefined;
   private authorizationGeneration = 0;
   private authenticationController: AbortController | undefined;
   private foregroundLease: unknown;
   private negotiatedMinor: number | undefined;
   private syncController: AbortController | undefined;
+  private readonly deferredSyncEvents: { readonly type: string; readonly body: JsonObject }[] = [];
+  /** Highest sequence already represented by sync snapshot/replay output per canonical stream. */
+  private readonly syncDeliveredThrough = new Map<string, bigint>();
+  /** Serializes post-sync live publications behind the completion fence. */
+  private livePublicationTail: Promise<void> = Promise.resolve();
+  private syncCatalogJson: string | undefined;
   private cleaned = false;
 
   constructor(
@@ -195,6 +214,9 @@ class GatewayConnectionImpl implements GatewayConnection {
     }
     this.sync = new CanonicalSyncSequencer(options.sync, async (type, body, replyTo) => {
       if (this.currentPhase !== "SYNCING" || this.syncController === undefined) throw new GatewayRuntimeError("AUTH_REQUIRED", "Synchronization authorization expired");
+      if (CONFORMED_OUTBOUND_TYPES.has(type)) assertWireMessage(type, body);
+      this.trackSyncCanonicalOutput(type, body);
+      if (type === "session.catalog") this.syncCatalogJson = JSON.stringify(body["sessions"]);
       logWarn("gateway", `sync send ${type}`);
       await this.send(type, body, replyTo, this.syncController.signal);
     });
@@ -205,6 +227,7 @@ class GatewayConnectionImpl implements GatewayConnection {
       async (message) => this.sendMessage(message),
       this.controller.signal,
     );
+    this.voice = new VoiceStreamManager(options.voice, async (message) => this.sendMessage(message), this.controller.signal);
     void this.run();
   }
 
@@ -225,10 +248,22 @@ class GatewayConnectionImpl implements GatewayConnection {
     return this.mutualFacts?.deviceId;
   }
 
-  /** Best-effort live event push; only READY connections receive it. */
+  /** Pushes live events to READY clients and defers canonical appends across an active sync fence. */
   publish(type: string, body: JsonObject): void {
-    if (this.currentPhase !== "READY" || this.controller.signal.aborted) return;
-    void this.send(type, body).catch(() => undefined);
+    if (this.controller.signal.aborted) return;
+    this.assertLivePublication(type, body);
+    if (this.currentPhase === "SYNCING" && SYNC_BUFFERED_TYPES.has(type)) {
+      if (this.deferredSyncEvents.length >= MAX_DEFERRED_SYNC_EVENTS) {
+        this.requestClose("RESOURCE_EXHAUSTED");
+        return;
+      }
+      if (type === "event.batch") assertCanonicalBatch(body);
+      else assertWireMessage(type, body);
+      this.bufferSyncEvent(type, body);
+      return;
+    }
+    if (this.currentPhase !== "READY") return;
+    this.enqueueLivePublication(type, body);
   }
 
   private async run(): Promise<void> {
@@ -261,8 +296,12 @@ class GatewayConnectionImpl implements GatewayConnection {
   private async handleBinaryFrame(kind: FrameKind, payload: Uint8Array): Promise<void> {
     if (this.currentPhase !== "READY") throw new GatewayRuntimeError("AUTH_REQUIRED", "Binary streams require READY authorization");
     if (kind === FrameKind.BlobChunk) return this.streams.blobChunk(payload);
+    if (kind === FrameKind.AudioPcm) {
+      this.voice.audioPcm(payload);
+      return;
+    }
     if (kind === FrameKind.TerminalBytes) return this.streams.terminalBytes(payload);
-    throw new GatewayRuntimeError("PROTOCOL_VIOLATION", "Audio stream is not accepted by this gateway runtime");
+    throw new GatewayRuntimeError("PROTOCOL_VIOLATION", "Binary frame kind is unsupported");
   }
 
   private async enqueueWork(bytes: number, operation: () => Promise<void>): Promise<void> {
@@ -368,11 +407,12 @@ class GatewayConnectionImpl implements GatewayConnection {
       if (this.currentPhase !== "SYNCING") throw this.phaseError();
       const controller = this.syncController;
       if (controller === undefined) throw new GatewayRuntimeError("SYNC_REQUIRED", "Synchronization is not active");
-      const drained = await this.sync.acknowledge(message.body, controller.signal);
+      const drained = await this.sync.acknowledge(message.body, controller.signal, async () => {
+        await this.refreshSyncInventory(controller.signal);
+        await this.flushSyncEvents(controller.signal);
+      });
       if (!drained) return;
-      controller.abort("sync_committed");
-      this.syncController = undefined;
-      this.currentPhase = "READY";
+      await this.finishSync(controller);
       return;
     }
     if (message.type === "push.endpoint" || message.type === "push.endpoint.revoke") {
@@ -483,24 +523,174 @@ class GatewayConnectionImpl implements GatewayConnection {
     const authorizationGeneration = this.authorizationGeneration;
     const controller = linkedController(this.controller.signal);
     this.syncController = controller;
+    this.deferredSyncEvents.length = 0;
+    this.syncDeliveredThrough.clear();
+    this.syncCatalogJson = undefined;
     this.currentPhase = "SYNCING";
     try {
-      await this.sync.start(message.body, message.messageId, controller.signal);
+      await this.sync.start(message.body, message.messageId, controller.signal, async () => {
+        await this.refreshSyncInventory(controller.signal);
+        await this.flushSyncEvents(controller.signal);
+      });
       if (this.phase() !== "SYNCING" || this.authorizationGeneration !== authorizationGeneration) {
         throw new GatewayRuntimeError("AUTH_REQUIRED", "Synchronization authorization expired");
       }
       if (this.sync.completedWithoutWork) {
-        // Nothing to commit: catalogs + sync.complete were sent, no ack fence needed.
-        controller.abort("sync_committed");
-        if (this.syncController === controller) this.syncController = undefined;
-        this.currentPhase = "READY";
+        await this.finishSync(controller);
       }
     } catch (error) {
       if (this.syncController === controller) this.syncController = undefined;
       controller.abort("sync_failed");
       this.sync.cancel();
+      this.deferredSyncEvents.length = 0;
+      this.syncDeliveredThrough.clear();
       if (this.phase() === "SYNCING" && this.authorizationGeneration === authorizationGeneration) this.currentPhase = "USER_AUTHENTICATED";
       throw error;
+    }
+  }
+
+  private finishSync(controller: AbortController): Promise<void> {
+    // sync.complete was serialized by CanonicalSyncSequencer before this method.
+    // Do not await here: an event observed before READY remains buffered and is
+    // appended to the live queue after that completion fence.
+    const events = this.deferredSyncEvents.splice(0);
+    controller.abort("sync_committed");
+    if (this.syncController === controller) this.syncController = undefined;
+    this.currentPhase = "READY";
+    for (const event of orderedSyncEvents(events)) this.enqueueLivePublication(event.type, event.body);
+    return Promise.resolve();
+  }
+
+  private trackSyncCanonicalOutput(type: string, body: JsonObject): void {
+    if (type === "snapshot.end") {
+      const sessionId = body["sessionId"];
+      const streamEpoch = body["streamEpoch"];
+      const sequence = body["sequence"];
+      if (typeof sessionId === "string" && typeof streamEpoch === "string" && typeof sequence === "string") {
+        this.syncDeliveredThrough.set(canonicalStreamKey(sessionId, streamEpoch), BigInt(sequence));
+      }
+      return;
+    }
+    const events = type === "message.append" ? [body] : body["events"];
+    if (!Array.isArray(events)) return;
+    for (const event of events) {
+      if (!isJsonObject(event)) continue;
+      const sessionId = event["sessionId"];
+      const streamEpoch = event["streamEpoch"];
+      const sequence = event["sequence"];
+      if (typeof sessionId !== "string" || typeof streamEpoch !== "string" || typeof sequence !== "string") continue;
+      const key = canonicalStreamKey(sessionId, streamEpoch);
+      const current = this.syncDeliveredThrough.get(key);
+      const parsed = BigInt(sequence);
+      if (current === undefined || parsed > current) this.syncDeliveredThrough.set(key, parsed);
+    }
+  }
+
+  private assertLivePublication(type: string, body: JsonObject): void {
+    if (type === "event.batch") {
+      assertCanonicalBatch(body);
+      return;
+    }
+    if (type !== "message.append") return;
+    assertWireMessage(type, body);
+    if (body["piType"] !== "message_end") {
+      throw new GatewayRuntimeError("PROTOCOL_VIOLATION", "message.append must carry a finalized message_end record");
+    }
+    assertCanonicalRecord(body);
+  }
+
+  private withoutSyncDeliveredCanonicalRecords(type: string, body: JsonObject): JsonObject | undefined {
+    if (type === "message.append") {
+      return this.syncAlreadyDelivered(body) ? undefined : body;
+    }
+    if (type !== "event.batch") return body;
+    const events = body["events"];
+    if (!Array.isArray(events)) return body;
+    const pending = events.filter((event) => isJsonObject(event) && !this.syncAlreadyDelivered(event));
+    return pending.length === 0 ? undefined : { ...body, events: pending };
+  }
+
+  private syncAlreadyDelivered(event: JsonObject): boolean {
+    const sessionId = event["sessionId"];
+    const streamEpoch = event["streamEpoch"];
+    const sequence = event["sequence"];
+    if (typeof sessionId !== "string" || typeof streamEpoch !== "string" || typeof sequence !== "string") return false;
+    const delivered = this.syncDeliveredThrough.get(canonicalStreamKey(sessionId, streamEpoch));
+    return delivered !== undefined && BigInt(sequence) <= delivered;
+  }
+
+  private enqueueLivePublication(type: string, body: JsonObject): void {
+    const publication = this.livePublicationTail.then(async () => {
+      if (this.controller.signal.aborted || this.currentPhase !== "READY") return;
+      const pending = this.withoutSyncDeliveredCanonicalRecords(type, body);
+      if (pending === undefined) return;
+      await this.send(type, pending);
+      this.trackSyncCanonicalOutput(type, pending);
+    });
+    this.livePublicationTail = publication.catch((error: unknown) => {
+      logError("gateway", `live event send failed type=${type}`, error);
+      this.requestClose("PROTOCOL_VIOLATION");
+    });
+  }
+
+  private bufferSyncEvent(type: string, body: JsonObject): void {
+    const filtered = this.withoutSyncDeliveredCanonicalRecords(type, body);
+    if (filtered === undefined) return;
+    body = filtered;
+    if (type === "session.catalog" || type === "agents.catalog") {
+      const existing = this.deferredSyncEvents.findIndex((event) => event.type === type);
+      if (existing >= 0) this.deferredSyncEvents.splice(existing, 1);
+    } else if (type === "agents.update") {
+      const sessionId = body["sessionId"];
+      const agent = body["agent"];
+      const agentId = typeof agent === "object" && agent !== null && !Array.isArray(agent) ? agent["agentId"] : undefined;
+      const existing = this.deferredSyncEvents.findIndex((event) => {
+        const current = event.body["agent"];
+        return event.type === type && event.body["sessionId"] === sessionId && typeof current === "object" && current !== null && !Array.isArray(current) && current["agentId"] === agentId;
+      });
+      if (existing >= 0) this.deferredSyncEvents.splice(existing, 1);
+    }
+    this.deferredSyncEvents.push({ type, body });
+  }
+
+  private async refreshSyncInventory(signal: AbortSignal): Promise<void> {
+    const inventory = this.options.sync.inventory === undefined
+      ? {
+          catalog: await this.options.sync.catalog(signal),
+          resumes: (await this.options.sync.listAll?.(signal)) ?? [],
+        }
+      : await this.options.sync.inventory(signal);
+    const catalogBody: JsonObject = { sessions: inventory.catalog.map((entry) => ({ ...entry })) };
+    assertWireMessage("session.catalog", catalogBody);
+    const current = JSON.stringify(catalogBody["sessions"]);
+    if (current !== this.syncCatalogJson) this.bufferSyncEvent("session.catalog", catalogBody);
+  }
+
+  private async flushSyncEvents(signal: AbortSignal): Promise<void> {
+    const events = this.deferredSyncEvents.splice(0);
+    const catalogSessionIds = new Set<string>();
+    if (this.syncCatalogJson !== undefined) {
+      const sessions: unknown = JSON.parse(this.syncCatalogJson);
+      if (Array.isArray(sessions)) for (const session of sessions) {
+        if (isJsonObject(session)) {
+          const sessionId = session["sessionId"];
+          if (typeof sessionId === "string") catalogSessionIds.add(sessionId);
+        }
+      }
+    }
+    for (const event of events) {
+      if (event.type !== "session.catalog") continue;
+      const sessions = event.body["sessions"];
+      if (Array.isArray(sessions)) for (const session of sessions) {
+        if (typeof session === "object" && session !== null && !Array.isArray(session) && typeof session["sessionId"] === "string") catalogSessionIds.add(session["sessionId"]);
+      }
+    }
+    events.sort((left, right) => syncEventRank(left.type) - syncEventRank(right.type));
+    for (const event of events) {
+      if (event.type === "message.append" && typeof event.body["sessionId"] === "string" && !catalogSessionIds.has(event.body["sessionId"])) {
+        throw new GatewayRuntimeError("PROTOCOL_VIOLATION", "Deferred append has no refreshed catalog entry");
+      }
+      await this.send(event.type, event.body, null, signal);
     }
   }
 
@@ -522,11 +712,16 @@ class GatewayConnectionImpl implements GatewayConnection {
     if (message.type === "terminal.open") return this.streams.openTerminal(message.body);
     if (message.type === "terminal.resize") return this.streams.resizeTerminal(message.body);
     if (message.type === "terminal.history.request") return this.streams.terminalHistory(message.body);
-    if (message.type === "terminal.close") return this.streams.closeTerminal();
-    if (message.type === "voice.audio") {
-      this.startVoiceChunk(message);
+    if (message.type === "terminal.close") return this.streams.closeTerminal(message.body);
+    if (message.type === "voice.start") {
+      this.voice.start(message.body);
       return;
     }
+    if (message.type === "voice.audio") {
+      this.voice.boundary(message.body);
+      return;
+    }
+    if (message.type === "voice.cancel") return this.voice.cancel(message.body);
     throw new GatewayRuntimeError("PROTOCOL_VIOLATION", "Known mutation has no gateway runtime");
   }
 
@@ -557,58 +752,6 @@ class GatewayConnectionImpl implements GatewayConnection {
       await this.respondFailure(error, message.messageId);
     }).finally(() => {
       this.commandControllers.delete(commandController);
-    });
-  }
-
-  private startVoiceChunk(message: Envelope): void {
-    const runtime = this.options.voice;
-    if (runtime === undefined) throw new GatewayRuntimeError("PROTOCOL_VIOLATION", "Voice runtime is unavailable");
-    const chunk = parseVoiceAudio(message.body);
-    const controller = linkedController(this.controller.signal);
-    this.commandControllers.add(controller);
-    let lastRevision = 0;
-    let finished = false;
-    const sink: VoiceTranscriptSink = {
-      partial: async (update, signal) => {
-        signal.throwIfAborted();
-        if (finished || update.revision <= lastRevision || update.sessionId !== chunk.sessionId || update.chunkSequence !== chunk.chunkSequence) {
-          throw new GatewayRuntimeError("PROTOCOL_VIOLATION", "voice partial revisions must increase monotonically per chunk");
-        }
-        lastRevision = update.revision;
-        await this.send("voice.partial", {
-          sessionId: update.sessionId,
-          chunkSequence: update.chunkSequence,
-          revision: update.revision,
-          text: update.text,
-        }, null, controller.signal);
-      },
-      finish: async (update, signal) => {
-        signal.throwIfAborted();
-        if (finished || update.sessionId !== chunk.sessionId || update.chunkSequence !== chunk.chunkSequence) {
-          throw new GatewayRuntimeError("PROTOCOL_VIOLATION", "voice chunk is already closed");
-        }
-        finished = true;
-        await this.send("voice.finish", {
-          sessionId: update.sessionId,
-          chunkSequence: update.chunkSequence,
-          text: update.text,
-        }, null, controller.signal);
-      },
-    };
-    void runtime.submit(chunk, sink, controller.signal).catch(async (error: unknown) => {
-      if (this.controller.signal.aborted) return;
-      const raw = error instanceof Error && "code" in error && typeof (error as { code?: unknown }).code === "string"
-        ? (error as { code: string }).code
-        : "";
-      const code = /^[A-Z][A-Z0-9_]{1,63}$/.test(raw) ? raw : "VOICE_FAILED";
-      await this.send("voice.error", {
-        sessionId: chunk.sessionId,
-        chunkSequence: chunk.chunkSequence,
-        code,
-        message: "Voice transcription failed",
-      }, null, controller.signal).catch(() => undefined);
-    }).finally(() => {
-      this.commandControllers.delete(controller);
     });
   }
 
@@ -643,9 +786,14 @@ class GatewayConnectionImpl implements GatewayConnection {
     this.syncController?.abort(reason);
     this.syncController = undefined;
     this.sync.cancel();
+    this.deferredSyncEvents.length = 0;
+    this.syncDeliveredThrough.clear();
     this.currentPhase = "DEVICE_AUTHENTICATED";
     for (const controller of this.commandControllers) controller.abort(reason);
-    await this.streams.cancelAll(reason);
+    await Promise.all([
+      this.streams.cancelAll(reason),
+      this.voice.cancelAll(reason),
+    ]);
   }
 
   private authenticationBinding(): UserAuthenticationBinding {
@@ -677,6 +825,7 @@ class GatewayConnectionImpl implements GatewayConnection {
   ): Promise<void> {
     if (this.controller.signal.aborted) throw this.controller.signal.reason;
     signal.throwIfAborted();
+    if (CONFORMED_OUTBOUND_TYPES.has(type)) assertWireMessage(type, body);
     const envelope = createEnvelope(type, randomUUID(), replyTo, body);
     await this.writer.send(FrameKind.Json, encodeJsonPayload(envelope), signal);
   }
@@ -720,6 +869,8 @@ class GatewayConnectionImpl implements GatewayConnection {
     this.authenticationController = undefined;
     this.syncController?.abort(code);
     this.syncController = undefined;
+    this.deferredSyncEvents.length = 0;
+    this.syncDeliveredThrough.clear();
     this.controller.abort(code);
     this.writer.abort(code);
   }
@@ -729,7 +880,10 @@ class GatewayConnectionImpl implements GatewayConnection {
     this.cleaned = true;
     this.requestClose("CONNECTION_CLOSED");
     this.sync.cancel();
-    await this.streams.cancelAll("CONNECTION_CLOSED");
+    await Promise.all([
+      this.streams.cancelAll("CONNECTION_CLOSED"),
+      this.voice.cancelAll("CONNECTION_CLOSED"),
+    ]);
     try {
       if (this.pairingContext !== undefined) await this.options.pairing.cancel?.(this.pairingContext);
     } catch (error) {
@@ -810,6 +964,45 @@ function validateOptions(options: HostGatewayOptions): void {
   validatedPasskeySessionTtlMs(options.passkeySessionTtlMs);
 }
 
+function assertCanonicalBatch(body: JsonObject): void {
+  const events = body["events"];
+  if (!Array.isArray(events) || events.length === 0 || events.length > 128) {
+    throw new GatewayRuntimeError("PROTOCOL_VIOLATION", "event.batch must contain bounded canonical records");
+  }
+  for (const event of events) {
+    if (!isJsonObject(event)) throw new GatewayRuntimeError("PROTOCOL_VIOLATION", "event.batch record is invalid");
+    assertCanonicalRecord(event);
+  }
+}
+
+function assertCanonicalRecord(record: JsonObject): void {
+  if (
+    !UUID_V4.test(record["sessionId"] as string) || !UUID_V4.test(record["streamEpoch"] as string)
+    || !isUint64(record["sequence"]) || typeof record["piType"] !== "string" || record["piType"].length === 0 || record["piType"].length > 128
+    || !isJsonObject(record["projection"]) || !isUint64(record["rawSize"]) || typeof record["rawSha256"] !== "string" || !SHA256.test(record["rawSha256"])
+    || typeof record["rawJson"] !== "string"
+  ) {
+    throw new GatewayRuntimeError("PROTOCOL_VIOLATION", "canonical record is invalid");
+  }
+}
+
+function isUint64(value: unknown): value is string {
+  if (typeof value !== "string" || !/^(0|[1-9][0-9]{0,19})$/.test(value)) return false;
+  return BigInt(value) <= 18_446_744_073_709_551_615n;
+}
+
+function canonicalStreamKey(sessionId: string, streamEpoch: string): string {
+  return `${sessionId}\u0000${streamEpoch}`;
+}
+
+function syncEventRank(type: string): number {
+  return type === "session.catalog" ? 0 : type === "agents.catalog" ? 1 : type === "agents.update" ? 2 : 3;
+}
+
+function orderedSyncEvents(events: readonly { readonly type: string; readonly body: JsonObject }[]): { readonly type: string; readonly body: JsonObject }[] {
+  return [...events].sort((left, right) => syncEventRank(left.type) - syncEventRank(right.type));
+}
+
 function normalizeError(error: unknown): GatewayRuntimeError {
   if (error instanceof GatewayRuntimeError) return error;
   if (error instanceof CommandGatewayError || error instanceof StreamGatewayError || error instanceof SyncSequenceError || error instanceof ProtocolError) {
@@ -843,31 +1036,6 @@ function validatedPasskeySessionTtlMs(value: number | undefined): number {
     throw new RangeError("passkey session TTL is invalid");
   }
   return ttl;
-}
-
-function parseVoiceAudio(body: JsonObject): VoiceAudioChunk {
-  const sessionId = body["sessionId"];
-  const chunkSequence = body["chunkSequence"];
-  const final = body["final"];
-  const audio = body["audio"];
-  if (
-    typeof sessionId !== "string" || !UUID_V4.test(sessionId)
-    || !Number.isSafeInteger(chunkSequence) || (chunkSequence as number) < 0 || (chunkSequence as number) > MAX_VOICE_CHUNK_SEQUENCE
-    || typeof final !== "boolean"
-    || typeof audio !== "string" || audio.length === 0 || !BASE64URL.test(audio)
-  ) {
-    throw new GatewayRuntimeError("PROTOCOL_VIOLATION", "voice.audio body is invalid");
-  }
-  const pcm = Buffer.from(audio, "base64url");
-  if (pcm.byteLength === 0 || pcm.byteLength % 2 !== 0 || pcm.byteLength > MAX_VOICE_CHUNK_BYTES) {
-    throw new GatewayRuntimeError("RESOURCE_EXHAUSTED", "voice chunk exceeds bounds");
-  }
-  return {
-    sessionId,
-    chunkSequence: chunkSequence as number,
-    final,
-    pcm16le: new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength),
-  };
 }
 
 function linkedController(parent: AbortSignal): AbortController {

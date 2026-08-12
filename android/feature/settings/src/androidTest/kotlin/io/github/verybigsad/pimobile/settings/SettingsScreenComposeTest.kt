@@ -172,6 +172,79 @@ class SettingsScreenComposeTest {
     }
 
     @Test
+    fun explicitDistributorChooserIsAccessibleAndRegistersSelection() {
+        val selectionRequired = fullState().copy(
+            notifications = fullState().notifications.copy(
+                distributor = PushDistributorState.SelectionRequired(
+                    listOf(
+                        PushDistributorOption("org.example.alpha", "Alpha Push"),
+                        PushDistributorOption("org.example.beta", "Beta Push"),
+                    ),
+                ),
+            ),
+        )
+        var selectedPackage: String? = null
+        compose.setContent {
+            MaterialTheme {
+                SettingsScreen(
+                    selectionRequired,
+                    actions = SettingsActions(onSelectPushDistributor = { selectedPackage = it }),
+                    nowEpochMillis = NOW,
+                )
+            }
+        }
+
+        compose.onNodeWithContentDescription("Choose push distributor")
+            .performScrollTo()
+            .performClick()
+        compose.onNodeWithContentDescription("Select push distributor Beta Push").performClick()
+
+        assertThat(selectedPackage).isEqualTo("org.example.beta")
+    }
+
+    @Test
+    fun registeredDistributorCanBeChangedRetriedAndUnregistered() {
+        val available = fullState().copy(
+            notifications = fullState().notifications.copy(
+                distributor = PushDistributorState.Available(
+                    distributorName = "Alpha Push",
+                    connected = false,
+                    alternatives = listOf(
+                        PushDistributorOption("org.example.alpha", "Alpha Push"),
+                        PushDistributorOption("org.example.beta", "Beta Push"),
+                    ),
+                ),
+                endpointRegistration = EndpointRegistrationState.FAILED,
+            ),
+        )
+        var selectedPackage: String? = null
+        var retried = false
+        var unregistered = false
+        compose.setContent {
+            MaterialTheme {
+                SettingsScreen(
+                    available,
+                    actions = SettingsActions(
+                        onSelectPushDistributor = { selectedPackage = it },
+                        onRequestPushRegistration = { retried = true },
+                        onUnregisterPush = { unregistered = true },
+                    ),
+                    nowEpochMillis = NOW,
+                )
+            }
+        }
+
+        compose.onNodeWithContentDescription("Retry registration").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Unregister push notifications").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Change push distributor").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Select push distributor Beta Push").performClick()
+
+        assertThat(retried).isTrue()
+        assertThat(unregistered).isTrue()
+        assertThat(selectedPackage).isEqualTo("org.example.beta")
+    }
+
+    @Test
     fun deniedPermissionOffersGrantAction() {
         val denied = fullState().let {
             it.copy(

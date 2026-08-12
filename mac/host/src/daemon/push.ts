@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type { SettlementNotice } from "./session-service.js";
 
 export interface NtfyConfig {
@@ -10,7 +11,7 @@ export interface RegisteredPushEndpoint {
   readonly endpointId: string;
   readonly distributor: string;
   readonly endpoint: string;
-  readonly wakePublicKey: string;
+  readonly wakePublicKey?: string;
 }
 
 export type PushEndpointProvider = () => RegisteredPushEndpoint | undefined;
@@ -29,13 +30,18 @@ export interface PushPublisher {
 
 const MAX_ENDPOINT_PATH_LENGTH = 512;
 const PUBLISH_TIMEOUT_MS = 10_000;
+const OPAQUE_WAKE_RANDOM_BYTES = 32;
+const OPAQUE_WAKE_ID_LENGTH = 43;
+const OPAQUE_WAKE_ID_PATTERN = /^[A-Za-z0-9_-]+$/u;
+
+type OpaqueWakeIdProvider = () => string;
 
 /**
  * Publishes opaque wake notifications to the device-registered UnifiedPush
  * endpoint on the configured ntfy distributor. UnifiedPush delivery is a
- * plain POST to the endpoint URL the device received from its distributor;
- * payloads contain only catch-up metadata, never prompts, transcripts,
- * terminal bytes, or error text.
+ * plain POST to the endpoint URL the device received from its distributor.
+ * The body is exactly one cryptographically random, unpadded base64url wake ID;
+ * it carries no session, timestamp, prompt, transcript, terminal, or result data.
  *
  * Follow-up: if the ntfy UnifiedPush gateway is ever configured to require
  * VAPID webpush encryption for `wakePublicKey`, add aes128gcm encryption of
@@ -47,10 +53,12 @@ export class NtfyPushPublisher implements PushPublisher {
   private failed = 0;
   private skipped = 0;
   private lastPublishedKey: string | undefined;
+  private readonly inFlightKeys = new Set<string>();
 
   constructor(
     private readonly config: NtfyConfig | undefined,
     private readonly endpointProvider: PushEndpointProvider = () => undefined,
+    private readonly wakeIdProvider: OpaqueWakeIdProvider = createOpaqueWakeId,
   ) {
     if (config !== undefined) this.baseHost = validateConfig(config);
   }
@@ -65,22 +73,15 @@ export class NtfyPushPublisher implements PushPublisher {
       return;
     }
     const dedupeKey = `${notice.sessionId}:${notice.streamEpoch}:${notice.sequence}`;
-    if (dedupeKey === this.lastPublishedKey) return;
-    const body = JSON.stringify({
-      v: 1,
-      kind: "wake",
-      settlementId: notice.settlementId,
-      sessionId: notice.sessionId,
-      streamEpoch: notice.streamEpoch,
-      sequence: notice.sequence,
-      atMs: notice.settledAtMs,
-    });
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      Title: "pi-mobile",
-      Tags: "bell",
-    };
+    if (dedupeKey === this.lastPublishedKey || this.inFlightKeys.has(dedupeKey)) return;
+    const body = this.wakeIdProvider();
+    if (!isOpaqueWakeId(body)) {
+      this.failed += 1;
+      return;
+    }
+    const headers: Record<string, string> = { "Content-Type": "application/octet-stream" };
     if (config.token !== undefined) headers["Authorization"] = `Bearer ${config.token}`;
+    this.inFlightKeys.add(dedupeKey);
     try {
       const response = await fetch(target, {
         method: "POST",
@@ -98,6 +99,8 @@ export class NtfyPushPublisher implements PushPublisher {
       this.published += 1;
     } catch {
       this.failed += 1;
+    } finally {
+      this.inFlightKeys.delete(dedupeKey);
     }
   }
 
@@ -129,6 +132,14 @@ export class NtfyPushPublisher implements PushPublisher {
     }
     return url.toString();
   }
+}
+
+function createOpaqueWakeId(): string {
+  return randomBytes(OPAQUE_WAKE_RANDOM_BYTES).toString("base64url");
+}
+
+function isOpaqueWakeId(value: string): boolean {
+  return value.length === OPAQUE_WAKE_ID_LENGTH && OPAQUE_WAKE_ID_PATTERN.test(value);
 }
 
 function validateConfig(config: NtfyConfig): string {

@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,6 +25,20 @@ async function socketPath(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "pi-mobile-admin-"));
   roots.push(root);
   return join(root, "admin.sock");
+}
+
+async function opaqueWakeFixture(): Promise<{ hostPayload: string; minBytes: number; maxBytes: number }> {
+  const path = resolve(dirname(fileURLToPath(import.meta.url)), "../../../protocol/fixtures/opaque-wake-v1.json");
+  const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new TypeError("invalid wake fixture");
+  const record = parsed as Record<string, unknown>;
+  const hostPayload = record["hostPayload"];
+  const minBytes = record["minBytes"];
+  const maxBytes = record["maxBytes"];
+  if (typeof hostPayload !== "string" || typeof minBytes !== "number" || typeof maxBytes !== "number") {
+    throw new TypeError("invalid wake fixture");
+  }
+  return { hostPayload, minBytes, maxBytes };
 }
 
 describe("AdminServer", () => {
@@ -95,19 +109,87 @@ describe("NtfyPushPublisher", () => {
     wakePublicKey: "BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM",
   };
 
-  it("posts the wake to the device-registered endpoint URL", async () => {
-    const calls: { url: string; body: string }[] = [];
-    vi.stubGlobal("fetch", (input: unknown, init?: { body?: unknown }) => {
-      calls.push({ url: String(input), body: String(init?.body) });
+  it("publishes to a stored keyless endpoint", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", (input: unknown) => {
+      calls.push(String(input));
+      return Promise.resolve(new Response("ok", { status: 200 }));
+    });
+    const keyless = {
+      deviceId: registration.deviceId,
+      endpointId: registration.endpointId,
+      distributor: registration.distributor,
+      endpoint: registration.endpoint,
+    };
+    const publisher = new NtfyPushPublisher(
+      { url: "https://ntfy.example.com" },
+      () => keyless,
+    );
+
+    await publisher.publishWake(notice);
+
+    expect(calls).toEqual([keyless.endpoint]);
+    expect(publisher.status()).toMatchObject({ published: 1, failed: 0, skipped: 0 });
+  });
+
+  it("posts the shared Android-contract wake fixture without metadata", async () => {
+    const fixture = await opaqueWakeFixture();
+    const calls: { url: string; body: string; contentType: string | undefined }[] = [];
+    vi.stubGlobal("fetch", (input: unknown, init?: { body?: unknown; headers?: Record<string, string> }) => {
+      calls.push({
+        url: String(input),
+        body: String(init?.body),
+        contentType: init?.headers?.["Content-Type"],
+      });
+      return Promise.resolve(new Response("ok", { status: 200 }));
+    });
+    const publisher = new NtfyPushPublisher(
+      { url: "https://ntfy.example.com" },
+      () => registration,
+      () => fixture.hostPayload,
+    );
+    await publisher.publishWake(notice);
+    expect(calls).toEqual([{
+      url: "https://ntfy.example.com/upAbCdEf123",
+      body: fixture.hostPayload,
+      contentType: "application/octet-stream",
+    }]);
+    expect(calls[0]?.body).toMatch(/^[A-Za-z0-9_-]+$/u);
+    expect(calls[0]?.body.length).toBeGreaterThanOrEqual(fixture.minBytes);
+    expect(calls[0]?.body.length).toBeLessThanOrEqual(fixture.maxBytes);
+    expect(calls[0]?.body).not.toContain(notice.sessionId);
+    expect(calls[0]?.body).not.toContain(String(notice.settledAtMs));
+    expect(publisher.status()).toMatchObject({ configured: true, published: 1, failed: 0, skipped: 0 });
+  });
+
+  it("generates a fresh 32-byte opaque wake ID for each settlement", async () => {
+    const bodies: string[] = [];
+    vi.stubGlobal("fetch", (_input: unknown, init?: { body?: unknown }) => {
+      bodies.push(String(init?.body));
       return Promise.resolve(new Response("ok", { status: 200 }));
     });
     const publisher = new NtfyPushPublisher({ url: "https://ntfy.example.com" }, () => registration);
     await publisher.publishWake(notice);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.url).toBe("https://ntfy.example.com/upAbCdEf123");
-    expect(calls[0]?.body).not.toContain("prompt");
-    expect(JSON.parse(calls[0]?.body ?? "{}")).toMatchObject({ kind: "wake", sessionId: notice.sessionId });
-    expect(publisher.status()).toMatchObject({ configured: true, published: 1, failed: 0, skipped: 0 });
+    await publisher.publishWake({ ...notice, sequence: "8" });
+    expect(bodies).toHaveLength(2);
+    expect(new Set(bodies).size).toBe(2);
+    for (const body of bodies) expect(body).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+  });
+
+  it("fails closed before network I/O if an invalid wake ID is produced", async () => {
+    const calls: unknown[] = [];
+    vi.stubGlobal("fetch", (input: unknown) => {
+      calls.push(input);
+      return Promise.resolve(new Response("ok", { status: 200 }));
+    });
+    const publisher = new NtfyPushPublisher(
+      { url: "https://ntfy.example.com" },
+      () => registration,
+      () => JSON.stringify({ sessionId: notice.sessionId }),
+    );
+    await publisher.publishWake(notice);
+    expect(calls).toHaveLength(0);
+    expect(publisher.status()).toEqual({ configured: true, published: 0, failed: 1, skipped: 0 });
   });
 
   it("sends the bearer token header when configured", async () => {

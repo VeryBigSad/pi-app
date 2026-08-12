@@ -23,7 +23,9 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Test
@@ -46,21 +48,11 @@ class SnapshotSyncPipelineTest {
 
     private fun sha256(text: String): String = io.github.verybigsad.pimobile.protocol.sha256Hex(text.encodeToByteArray())
 
-    private fun metaEntry(id: String): JsonObject {
-        val raw = "{\"id\":\"$id\"}"
-        return buildJsonObject {
-            put("id", id)
-            put("type", "extension_ui_request")
-            put("rawJson", raw)
-            put("rawSize", raw.encodeToByteArray().size.toString())
-            put("rawSha256", sha256(raw))
-        }
-    }
-
-    private fun messageEntry(id: String, role: String, text: String): JsonObject = buildJsonObject {
+    private fun messageEntry(id: String, appendId: String, role: String, text: String): JsonObject = buildJsonObject {
         val raw = "{\"type\":\"message_end\"}"
         put("id", id)
         put("messageId", id)
+        put("appendId", appendId)
         put("type", "message_end")
         put("role", role)
         put("content", JsonArray(listOf(buildJsonObject { put("type", "text"); put("text", text) })))
@@ -83,6 +75,8 @@ class SnapshotSyncPipelineTest {
                     put("sessionId", sessionId)
                     put("streamEpoch", EPOCH)
                     put("sequence", sequence)
+                    put("messageCount", entries.size.toString())
+                    put("lastAppendId", entries.lastOrNull()?.get("appendId") ?: JsonNull)
                 },
             ),
         )
@@ -94,19 +88,34 @@ class SnapshotSyncPipelineTest {
                         put("sessionId", sessionId)
                         put("streamEpoch", EPOCH)
                         put("sequence", sequence)
+                        put("page", entries.indexOf(entry))
                         put("entries", JsonArray(listOf(entry)))
                     },
                 ),
             )
         }
-        router.handle(envelope("snapshot.end", buildJsonObject { put("sessionId", sessionId); put("streamEpoch", EPOCH); put("sequence", sequence) }))
+        router.handle(
+            envelope(
+                "snapshot.end",
+                buildJsonObject {
+                    put("sessionId", sessionId)
+                    put("streamEpoch", EPOCH)
+                    put("sequence", sequence)
+                    put("pages", entries.size)
+                    put("messageCount", entries.size.toString())
+                    put("lastAppendId", entries.lastOrNull()?.get("appendId") ?: JsonNull)
+                    put("leafId", JsonNull)
+                    put("validated", true)
+                },
+            ),
+        )
     }
 
     @Test
     fun `router emits SnapshotReady for a snapshot with zero content entries`() {
         val events = ArrayList<HostConnectionEvent>()
         val router = HostInboundRouter(events::add)
-        snapshotFrames(router, SESSION_EMPTY, sequence = "3", entries = listOf(metaEntry("meta-1"), metaEntry("meta-2")))
+        snapshotFrames(router, SESSION_EMPTY, sequence = "3", entries = emptyList())
         val ready = events.filterIsInstance<HostConnectionEvent.SnapshotReady>()
         assertThat(ready).hasSize(1)
         assertThat(ready.single().sessionId).isEqualTo(SessionId(SESSION_EMPTY))
@@ -126,9 +135,67 @@ class SnapshotSyncPipelineTest {
             // no rawJson/rawRef: violates the authenticity contract
         }
         snapshotFrames(router, SESSION_CONTENT, sequence = "4", entries = listOf(broken))
-        // The host blocks the whole sync queue on the per-session ack; an unmapped snapshot
-        // must still surface an outcome the coordinator can ack (without committing content).
+        // Invalid authoritative content surfaces a rejection and is never committed or acknowledged.
         assertThat(events.any { it is HostConnectionEvent.SnapshotRejected || it is HostConnectionEvent.SnapshotReady }).isTrue()
+    }
+
+    @Test
+    fun `router preserves metadata start update and final canonical cursor parity`() {
+        val events = ArrayList<HostConnectionEvent>()
+        val router = HostInboundRouter(events::add, nowEpochMillis = { 1_000L })
+        fun canonical(sequence: String, piType: String, projection: JsonObject): JsonObject {
+            val raw = "{\"type\":\"$piType\"}"
+            return buildJsonObject {
+                put("sessionId", SESSION_CONTENT)
+                put("streamEpoch", EPOCH)
+                put("sequence", sequence)
+                put("piType", piType)
+                put("rawJson", raw)
+                put("rawSize", raw.encodeToByteArray().size.toString())
+                put("rawSha256", sha256(raw))
+                put("projection", projection)
+            }
+        }
+        router.handle(envelope("event.batch", buildJsonObject {
+            put("events", buildJsonArray {
+                add(canonical("1", "agent_start", buildJsonObject { put("type", "agent_start") }))
+                add(canonical("2", "message_start", buildJsonObject {
+                    put("type", "message_start")
+                    put("message", buildJsonObject {
+                        put("id", "m-1")
+                        put("role", "assistant")
+                        put("content", JsonArray(emptyList()))
+                    })
+                }))
+                add(canonical("3", "message_update", buildJsonObject {
+                    put("type", "message_update")
+                    put("assistantMessageEvent", buildJsonObject { put("type", "text_delta"); put("contentIndex", 0); put("delta", "draft") })
+                }))
+            })
+        }))
+        val finalRaw = "{\"type\":\"message_end\"}"
+        router.handle(envelope("message.append", buildJsonObject {
+            put("sessionId", SESSION_CONTENT)
+            put("streamEpoch", EPOCH)
+            put("sequence", "4")
+            put("appendId", "1")
+            put("piType", "message_end")
+            put("rawJson", finalRaw)
+            put("rawSize", finalRaw.encodeToByteArray().size.toString())
+            put("rawSha256", sha256(finalRaw))
+            put("projection", buildJsonObject {
+                put("type", "message_end")
+                put("message", buildJsonObject {
+                    put("id", "m-1")
+                    put("role", "assistant")
+                    put("content", JsonArray(listOf(buildJsonObject { put("type", "text"); put("text", "final") })))
+                })
+            })
+        }))
+
+        val canonical = events.filterIsInstance<HostConnectionEvent.CanonicalEvent>()
+        assertThat(canonical.map { it.cursor.sequence.text }).containsExactly("1", "2", "3", "4").inOrder()
+        assertThat(canonical.last().finalized?.contentJson).contains("final")
     }
 
     @Test
@@ -143,7 +210,7 @@ class SnapshotSyncPipelineTest {
                     put("sessionId", SESSION_CONTENT)
                     put("streamEpoch", EPOCH)
                     put("sequence", "9")
-                    put("appendId", "append-9")
+                    put("appendId", "9")
                     put("piType", "message_end")
                     put("rawJson", raw)
                     put("rawSize", raw.encodeToByteArray().size.toString())
@@ -168,6 +235,19 @@ class SnapshotSyncPipelineTest {
         assertThat(canonical).hasSize(1)
         assertThat(canonical.single().sessionId).isEqualTo(SessionId(SESSION_CONTENT))
         assertThat(canonical.single().finalized).isNotNull()
+        assertThat(canonical.single().finalized!!.appendId).isEqualTo("9")
+        assertThat(canonical.single().conversationEvent)
+            .isEqualTo(
+                io.github.verybigsad.pimobile.model.ConversationEvent.MessageFinalized(
+                    io.github.verybigsad.pimobile.model.EventCursor(
+                        io.github.verybigsad.pimobile.model.StreamEpoch(EPOCH),
+                        io.github.verybigsad.pimobile.model.Uint64Decimal("9"),
+                        null,
+                    ),
+                    io.github.verybigsad.pimobile.model.AppendId("9"),
+                    io.github.verybigsad.pimobile.state.StorageMappers.finalizedMessage(canonical.single().finalized!!)!!,
+                ),
+            )
         assertThat(canonical.single().finalized!!.contentJson).contains("PONG")
     }
 
@@ -214,7 +294,7 @@ class SnapshotSyncPipelineTest {
             },
             voicePort = object : io.github.verybigsad.pimobile.state.VoicePort {
                 override suspend fun setForeground(foreground: Boolean) = Unit
-                override suspend fun start(): String? = null
+                override suspend fun start(targetSessionId: SessionId): String? = null
                 override suspend fun stop() = Unit
                 override suspend fun cancel() = Unit
                 override suspend fun onMacError(sessionId: String, error: io.github.verybigsad.pimobile.voice.MacVoiceError) = Unit
@@ -244,17 +324,16 @@ class SnapshotSyncPipelineTest {
             assertThat(sent.map { it.first }).contains("sync.resume")
 
             val router = HostInboundRouter({ event -> coordinator.submit(AppIntent.ConnectionEvent(1, event)) }, nowEpochMillis = { 1_000L })
-            // Session 1: snapshot with only meta records (zero content entries).
-            snapshotFrames(router, SESSION_EMPTY, sequence = "5", entries = listOf(metaEntry("meta-1")))
+            // Session 1: authoritative snapshot with zero finalized messages.
+            snapshotFrames(router, SESSION_EMPTY, sequence = "5", entries = emptyList())
             // Session 2: snapshot with message-shaped entries over a stale cached cursor.
             snapshotFrames(
                 router,
                 SESSION_CONTENT,
                 sequence = "3",
                 entries = listOf(
-                    metaEntry("meta-2"),
-                    messageEntry("msg-$EPOCH-1", "user", "hello pi"),
-                    messageEntry("msg-$EPOCH-2", "assistant", "hello human"),
+                    messageEntry("msg-$EPOCH-1", "1", "user", "hello pi"),
+                    messageEntry("msg-$EPOCH-2", "2", "assistant", "hello human"),
                 ),
             )
             router.handle(envelope("sync.complete", buildJsonObject { }))
@@ -322,6 +401,10 @@ class SnapshotSyncPipelineTest {
 
         override suspend fun loadTrustState(macId: String): TrustStateEntity? = null
         override suspend fun loadSessions(): List<SessionEntity> = sessions.values.toList()
+        override suspend fun loadSession(sessionId: String): SessionEntity? = sessions[sessionId]
+        override suspend fun upsertSession(session: SessionEntity) {
+            sessions[session.sessionId] = session
+        }
         override suspend fun loadRecentMessages(sessionId: String, limit: Int): List<MessageEntity> =
             messages[sessionId].orEmpty().takeLast(limit)
 
@@ -335,9 +418,9 @@ class SnapshotSyncPipelineTest {
         override suspend fun deleteTrustState(macId: String) = Unit
         override suspend fun markCanonicalUnavailable() = Unit
 
-        override suspend fun commitFinalizedMessage(session: SessionEntity, message: MessageEntity) {
+        override suspend fun commitCanonicalEvent(session: SessionEntity, finalized: MessageEntity?) {
             sessions[session.sessionId] = session
-            messages.getOrPut(message.sessionId) { ArrayList() }.add(message)
+            if (finalized != null) messages.getOrPut(finalized.sessionId) { ArrayList() }.add(finalized)
         }
 
         override suspend fun replaceSessionSnapshot(session: SessionEntity, messages: List<MessageEntity>) {
@@ -348,6 +431,11 @@ class SnapshotSyncPipelineTest {
         override suspend fun resetSessionContent(session: SessionEntity) {
             sessions[session.sessionId] = session
             messages.remove(session.sessionId)
+        }
+
+        override suspend fun revokeAndPurge(macId: String, revokedAtEpochMs: Long, reasonCode: String) {
+            sessions.clear()
+            messages.clear()
         }
 
         override suspend fun committedCursors(): List<Pair<String, CanonicalAppendCursor>> =
