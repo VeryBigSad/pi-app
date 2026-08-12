@@ -47,8 +47,8 @@ describe("parseSignerOutput", () => {
     );
   });
 
-  it("accepts CRLF output from GitHub's Linux apksigner process", () => {
-    expect(parseSignerOutput(signerOutput.replaceAll("\n", "\r\n"))).toBe(
+  it.each(["\r\n", " \n", "\t\r\n"])("accepts platform trailing whitespace %j", (ending) => {
+    expect(parseSignerOutput(signerOutput.replaceAll("\n", ending))).toBe(
       "CC:36:66:F3:77:CE:4C:2B:D6:CE:19:A4:7F:3A:BE:47:19:AC:04:0F:D6:4F:FB:11:9F:02:E9:AC:4B:DD:D4:FE",
     );
   });

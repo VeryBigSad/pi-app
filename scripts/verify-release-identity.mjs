@@ -30,15 +30,16 @@ export function normalizeFingerprint(hex) {
 }
 
 export function parseSignerOutput(output) {
-  const signerCount = /^Number of signers: ([0-9]+)$/mu.exec(output)?.[1];
-  const certificateLines = output.split("\n").filter((line) => line.includes("certificate SHA-256 digest:"));
+  const lines = output.split("\n").map((line) => line.trimEnd());
+  const signerCount = lines.map((line) => /^Number of signers: ([0-9]+)$/u.exec(line)?.[1]).find((value) => value !== undefined);
+  const certificateLines = lines.filter((line) => line.includes("certificate SHA-256 digest:"));
   if (signerCount !== "1" || certificateLines.length !== 1) {
     throw new Error(`expected exactly one signer certificate, got signers=${signerCount ?? "unknown"}, certificates=${certificateLines.length}`);
   }
-  const digest = /^Signer #1 certificate SHA-256 digest: ([0-9a-f]{64})\r?$/u.exec(certificateLines[0])?.[1];
+  const digest = /^Signer #1 certificate SHA-256 digest: ([0-9a-f]{64})$/u.exec(certificateLines[0])?.[1];
   if (digest === undefined) throw new Error("unexpected signer certificate output");
-  const v2 = /^Verified using v2 scheme \(APK Signature Scheme v2\): true$/mu.test(output);
-  const v3 = /^Verified using v3 scheme \(APK Signature Scheme v3\): true$/mu.test(output);
+  const v2 = lines.includes("Verified using v2 scheme (APK Signature Scheme v2): true");
+  const v3 = lines.includes("Verified using v3 scheme (APK Signature Scheme v3): true");
   if (!v2 && !v3) throw new Error("APK has neither a verified v2 nor v3 signature");
   return normalizeFingerprint(digest);
 }
