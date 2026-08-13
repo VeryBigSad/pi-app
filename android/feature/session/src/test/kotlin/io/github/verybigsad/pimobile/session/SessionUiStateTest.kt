@@ -178,6 +178,34 @@ class SessionUiStateTest {
     }
 
     @Test
+    fun terminalModeFailsClosedWithoutLiveReadyAuthentication() {
+        val online = detailState(ready(now + 1_000))
+        val deviceAuthenticated = detailState(
+            ConnectionState.DeviceAuthenticated(
+                path = TransportPath.DIRECT,
+                macId = macId,
+                deviceAuthentication = MutualTlsAuthentication("cert", now - 1),
+            ),
+        )
+        val offline = detailState(
+            connection = ConnectionState.Disconnected(DisconnectReason.NETWORK_LOST),
+            retainedAuthentication = PasskeyAuthentication("retained", now - 1, now + 1_000),
+        )
+
+        assertThat(online.terminalModeAvailability).isEqualTo(
+            TerminalModeAvailability.Available(TransportPath.DIRECT),
+        )
+        assertThat(deviceAuthenticated.terminalModeAvailability).isEqualTo(
+            TerminalModeAvailability.Unavailable(
+                TerminalModeUnavailableReason.AUTHENTICATED_CONNECTION_REQUIRED,
+            ),
+        )
+        assertThat(offline.terminalModeAvailability).isEqualTo(
+            TerminalModeAvailability.Unavailable(TerminalModeUnavailableReason.OFFLINE_CACHE),
+        )
+    }
+
+    @Test
     fun unavailableCanonicalStateHidesFinalAndProvisionalRows() {
         val conversation = conversation().copy(
             availability = CanonicalAvailability.Unavailable(
@@ -238,6 +266,21 @@ class SessionUiStateTest {
 
         assertThat(offer.binding).isEqualTo(ApprovalBinding("offer-id", "operation-id", "exact-hash"))
     }
+
+    private fun detailState(
+        connection: ConnectionState,
+        retainedAuthentication: PasskeyAuthentication? = null,
+    ): SessionDetailUiState = SessionDetailUiState(
+        session = sessionState(conversation()).copy(connection = connection),
+        passkeyProvider = PasskeyProviderAvailability.Available("Provider"),
+        retainedAuthentication = retainedAuthentication,
+        nowEpochMillis = now,
+        macDisplayName = "Test Mac",
+        modelName = null,
+        thinkingLevel = null,
+        elapsedLabel = null,
+        lastSyncedLabel = null,
+    )
 
     private fun ready(expiresAt: Long): ConnectionState.Ready = ConnectionState.Ready(
         path = TransportPath.DIRECT,

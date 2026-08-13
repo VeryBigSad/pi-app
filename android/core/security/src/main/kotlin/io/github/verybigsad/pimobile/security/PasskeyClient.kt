@@ -1,12 +1,10 @@
 package io.github.verybigsad.pimobile.security
 
 import android.app.Activity
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.service.credentials.CredentialProviderService
-import androidx.annotation.RequiresApi
 import androidx.credentials.CreatePublicKeyCredentialRequest
 import androidx.credentials.CreatePublicKeyCredentialResponse
 import androidx.credentials.CredentialManager
@@ -188,25 +186,38 @@ internal object PasskeyProviderProbe {
         }.getOrDefault(false)
         PasskeyProviderMatrix.evaluate(Build.VERSION.SDK_INT, playServicesAvailable, 0)
     } else {
-        val enabledProviders = runCatching { enabledFrameworkProviders(context) }.getOrDefault(0)
-        PasskeyProviderMatrix.evaluate(Build.VERSION.SDK_INT, false, enabledProviders)
+        val providerCandidates = runCatching { frameworkProviderCandidates(context) }.getOrDefault(0)
+        PasskeyProviderMatrix.evaluate(Build.VERSION.SDK_INT, false, providerCandidates)
     }
 
-    @RequiresApi(34)
     @Suppress("DEPRECATION")
-    private fun enabledFrameworkProviders(context: Context): Int {
-        val framework = context.getSystemService(android.credentials.CredentialManager::class.java) ?: return 0
+    private fun frameworkProviderCandidates(context: Context): Int {
         val services = context.packageManager.queryIntentServices(
             Intent(CredentialProviderService.SERVICE_INTERFACE),
             android.content.pm.PackageManager.MATCH_ALL,
         )
         require(services.size <= 64)
-        return services.mapNotNull { info ->
+        return countFrameworkProviderCandidates(services.mapNotNull { info ->
             val service = info.serviceInfo ?: return@mapNotNull null
-            if (service.permission != "android.permission.BIND_CREDENTIAL_PROVIDER_SERVICE") return@mapNotNull null
-            ComponentName(service.packageName, service.name)
-        }.distinct().count { component ->
-            runCatching { framework.isEnabledCredentialProviderService(component) }.getOrDefault(false)
-        }
+            CredentialProviderServiceDescriptor(service.packageName, service.name, service.permission)
+        })
     }
 }
+
+internal data class CredentialProviderServiceDescriptor(
+    val packageName: String,
+    val className: String,
+    val permission: String?,
+)
+
+internal fun countFrameworkProviderCandidates(
+    services: Iterable<CredentialProviderServiceDescriptor>,
+): Int = services.asSequence()
+    .filter {
+        it.permission == "android.permission.BIND_CREDENTIAL_PROVIDER_SERVICE"
+            && it.packageName.isNotBlank()
+            && it.className.isNotBlank()
+    }
+    .map { it.packageName to it.className }
+    .distinct()
+    .count()

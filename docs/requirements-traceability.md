@@ -69,7 +69,7 @@ Honest remaining gates: multi-session sync completeness (session list may show a
 | R4 trust and path visibility | `android/feature/session`, status surfaces tests | verified-unit |
 | R4 contrast / non-color state / accessibility | `android/feature/session/src/androidTest/**`, `SettingsScreenComposeTest.kt`; TalkBack manual evidence **physical-gate-pending** | verified-instrumentation partial (emulator-only) |
 | R4 raw inspector | session timeline tests (`TimelinePresentationTest.kt`) | verified-unit |
-| R5 benchmark implementation + physical budgets | no Macrobenchmark suite in tree | not-implemented / physical-gate-pending |
+| R5 benchmark implementation + physical budgets | `android/benchmark/src/main/kotlin/io/github/verybigsad/pimobile/benchmark/PiMobileBenchmark.kt`; `android/app/src/main/kotlin/io/github/verybigsad/pimobile/BenchmarkTimelineHarness.kt`; `BenchmarkTimelineHarnessTest.kt`; app `baselineProfile`/ProfileInstaller wiring | verified-unit (fixture semantics); no executed Macrobenchmark / physical-gate-pending |
 | R5 latency/host/relay footprint | not implemented | not-implemented |
 | R6 no auth bypass | `mac/host/test/security-*.test.ts`, `android/core/security/src/test/**`; CI secret scan `secret-scan.yml` | verified-unit |
 | R6 DAL | `scripts/verify-dal.mjs`, `scripts/verify-dal.test.mjs`, `.github/workflows/dal.yml`; live 200/JSON/no-redirect + both relations verified | verified-unit + live check green; independent fingerprint review **physical-gate-pending** |
@@ -135,6 +135,6 @@ Honest remaining gates: multi-session sync completeness (session list may show a
 
 - No Firebase credentials: intentional; optional FCM is not a release gate.
 - Sleeping/offline Mac: inherent product limitation, not missing evidence.
-- Macrobenchmark/performance suite not yet implemented (R5) — this is missing work, not an external block.
+- Macrobenchmark harness is implemented (R5), but no measurement has run and Pixel-class physical budget evidence remains pending.
 - Multi-session sync completeness: app session list may show a subset until the ack/fence loop converges — under work.
 - Timeline live-render of streamed message content: verified at projection layer; full UI render evidence pending.

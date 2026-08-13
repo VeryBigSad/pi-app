@@ -17,6 +17,7 @@ import io.github.verybigsad.pimobile.MainViewModel
 import io.github.verybigsad.pimobile.model.SessionId
 import io.github.verybigsad.pimobile.session.SessionDetailScreen
 import io.github.verybigsad.pimobile.session.SessionListScreen
+import io.github.verybigsad.pimobile.session.TerminalModeAvailability
 import io.github.verybigsad.pimobile.state.AppIntent
 
 @Composable
@@ -36,7 +37,8 @@ fun SessionDetailDestination(
     activityActions: AppActivityActions = AppActivityActions(),
 ) {
     val state by viewModel.state.collectAsState()
-    val uiState = viewModel.detailUiState(state, sessionId, System.currentTimeMillis())
+    val voice by viewModel.voiceUiState.collectAsState()
+    val uiState = viewModel.detailUiState(state, sessionId, System.currentTimeMillis(), voice)
     if (uiState == null) {
         Column(
             modifier = Modifier.fillMaxSize().padding(24.dp),
@@ -58,6 +60,12 @@ fun SessionDetailDestination(
                 activityActions.onOpenVoicePermissionSettings()
             } else {
                 viewModel.submit(AppIntent.DetailEvent(sessionId, event))
+            }
+        },
+        onOpenTerminal = {
+            val latest = viewModel.detailUiState(viewModel.state.value, sessionId, System.currentTimeMillis())
+            if (latest?.terminalModeAvailability is TerminalModeAvailability.Available) {
+                viewModel.openTerminal(sessionId)
             }
         },
     )

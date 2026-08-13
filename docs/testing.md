@@ -54,6 +54,29 @@ Scope to one module when iterating (do not run the aggregate for a focused chang
 ./gradlew :android:feature:session:lintDebug
 ```
 
+### Macrobenchmark and Baseline Profile
+
+`:android:benchmark` is a pinned `com.android.test` Macrobenchmark/Baseline Profile module. The Baseline Profile plugin creates `nonMinifiedRelease` for profile collection and R8-minified `benchmarkRelease` for measurement; the app consumes generated profiles through its `baselineProfile` dependency and `androidx.profileinstaller`. `automaticGenerationDuringBuild` remains disabled, so ordinary assembly and CI never attach a device or synthesize performance evidence.
+
+The benchmark-only route is rejected by ordinary `debug` and `release` builds. It opens the production session detail/timeline path with 10,000 historical events, 500 retained finalized messages, and a deterministic 100-event-per-second finalization catch-up. The harness measures cold startup, timeline frame timing, and the named `PiBenchmarkCatchUp` trace section with `CompilationMode.Partial(BaselineProfileMode.Require)`. Its catch-up is an in-process reducer/UI load; host/relay latency, PSS, five-cycle retained growth, and terminal timing remain separate physical gates.
+
+Generate a profile on a rooted emulator or API 33+ device before measuring:
+
+```bash
+export JAVA_HOME=$(/usr/libexec/java_home -v 21)
+ANDROID_SERIAL=<serial> ./gradlew --no-daemon --no-configuration-cache :android:app:generateReleaseBaselineProfile
+```
+
+Run the Macrobenchmark class on the same explicit serial:
+
+```bash
+ANDROID_SERIAL=<serial> ./gradlew --no-daemon --no-configuration-cache \
+  :android:benchmark:connectedBenchmarkReleaseAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=io.github.verybigsad.pimobile.benchmark.PiMobileMacrobenchmark
+```
+
+A rooted emulator may run the harness only as a diagnostic. To bypass Macrobenchmark's emulator refusal for that purpose, add `-Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.suppressErrors=EMULATOR`; never use its numbers to meet a budget. Pixel 7-class-or-newer physical 60 Hz release-build evidence remains required. No app-specific generated profile or Macrobenchmark result has been recorded by this change.
+
 ### Android instrumentation (emulator)
 
 Recorded green run: 113 connected tests, 0 failures, on AVD `PiApp_API_29` (Google APIs, WebView 91.0.4472.114) at serial `emulator-5590`. Modules covered: app launch + terminal canary, core security/network/storage/push/voice/update, feature session/agents/settings, terminal runtime.
@@ -150,7 +173,7 @@ No `terraform apply` has been run; there is no cloud evidence.
 | Terminal | Emulator plus real PTY | Rendering, keys, resize, reconnect, isolation | **exists, API 29 only** — canary + runtime instrumentation |
 | Security | CI | Replay, revocation, redaction, DAL, opacity, dependency scan | **exists** — security suites + `dal.yml` + `secret-scan.yml` |
 | Supply chain | CI | Locks, checksums, CycloneDX SBOMs, high-severity SCA, fail-closed licenses, secret scan, signed package smoke | **exists** — `scripts/supply-chain.mjs`, exact license overrides, pinned Grype image, `npm audit`, `secret-scan.yml`, and relay image verification |
-| Performance | Physical device; emulator indicative only | Release-build Macrobenchmark against the budgets below | **missing** — no Macrobenchmark suite in tree |
+| Performance | Pixel 7-class-or-newer physical device; emulator diagnostic only | `:android:benchmark` cold startup plus deterministic timeline scroll/catch-up on profileable `benchmarkRelease` | **harness exists; no executed result** — physical budget gate pending |
 | Manual | Emulator and physical device | The matrices below, with sanitized artifacts | **pending** — physical device unavailable |
 
 ## Contract corpus
@@ -247,7 +270,7 @@ Implemented in `mac/host/src/voice/rate-ledger.ts` with fake-clock tests in `mac
 
 ## Performance budgets
 
-Release build with R8 and a Baseline Profile, Macrobenchmark, Pixel 7-class or newer physical 60 Hz device. These are assertions. Emulator figures are recorded separately and never used to claim a budget is met. Threshold changes need benchmark evidence and an ADR, not a test-only relaxation. **No Macrobenchmark suite exists yet (not-implemented).**
+Release build with R8 and a Baseline Profile, Macrobenchmark, Pixel 7-class or newer physical 60 Hz device. These are assertions. Emulator figures are recorded separately and never used to claim a budget is met. Threshold changes need benchmark evidence and an ADR, not a test-only relaxation. **The Macrobenchmark harness exists, but no benchmark result has been executed or accepted as evidence.**
 
 | Metric | Budget |
 |---|---:|
@@ -312,4 +335,4 @@ Existing coverage is named in [requirements-traceability.md](requirements-tracea
 
 ## CI
 
-Current workflows are enumerated at the top of this document. Every commit runs node (lint/typecheck/tests/fixtures/DAL/audit), supply-chain (SBOM/license/SCA/relay-image closure), android (unit/lint/assemble ×2), android-api29 (instrumentation), terraform (fmt/validate), and go (relay). SBOMs are deterministic CycloneDX run artifacts; licenses reject unknown, forbidden, and unallowlisted values, except exact reviewed coordinates in `supply-chain/license-policy.json`. Pre-release still lacks Macrobenchmark/performance and the manual matrices. Cross-language fixture parity is a hard gate and exists.
+Current workflows are enumerated at the top of this document. Every commit runs node (lint/typecheck/tests/fixtures/DAL/audit), supply-chain (SBOM/license/SCA/relay-image closure), android (unit/lint/assemble ×2), android-api29 (instrumentation), terraform (fmt/validate), and go (relay). SBOMs are deterministic CycloneDX run artifacts; licenses reject unknown, forbidden, and unallowlisted values, except exact reviewed coordinates in `supply-chain/license-policy.json`. Macrobenchmark execution is intentionally outside CI until a controlled physical runner is available; no performance budget or manual-matrix evidence exists yet. Cross-language fixture parity is a hard gate and exists.

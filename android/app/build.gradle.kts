@@ -5,6 +5,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.androidx.baselineprofile)
 }
 
 val releaseStorePath = providers.environmentVariable("PI_MOBILE_KEYSTORE_PATH").orNull
@@ -80,6 +81,11 @@ android {
     }
 }
 
+baselineProfile {
+    saveInSrc = true
+    automaticGenerationDuringBuild = false
+}
+
 kotlin {
     jvmToolchain(21)
     compilerOptions.jvmTarget.set(JvmTarget.JVM_17)
@@ -99,6 +105,7 @@ dependencies {
     implementation(project(":android:feature:agents"))
     implementation(project(":android:feature:settings"))
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.profileinstaller)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
@@ -128,4 +135,5 @@ dependencies {
     androidTestImplementation(libs.androidx.work.testing)
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.compose.test.junit4)
+    baselineProfile(project(":android:benchmark"))
 }

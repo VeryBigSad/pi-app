@@ -16,6 +16,7 @@ dependencyResolutionManagement {
 
 rootProject.name = "pi-mobile"
 include(":android:app")
+include(":android:benchmark")
 include(":android:core:protocol")
 include(":android:core:network")
 include(":android:core:voice")

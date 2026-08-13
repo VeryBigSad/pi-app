@@ -169,6 +169,7 @@ class PiAppCoordinatorTest {
         resyncSignal: CanonicalResyncSignal? = null,
         val sentMessages: MutableList<Pair<String, String>> = ArrayList(),
         val voiceCanceled: MutableList<Boolean> = ArrayList(),
+        val voiceStopped: MutableList<Boolean> = ArrayList(),
         val voiceStarts: MutableList<SessionId> = ArrayList(),
         val lockedWakes: MutableList<Int> = ArrayList(),
         var voiceStartResult: String? = null,
@@ -218,7 +219,10 @@ class PiAppCoordinatorTest {
                         voiceStarts += targetSessionId
                         return voiceStartResult
                     }
-                    override suspend fun stop() = Unit
+                    override suspend fun stop() {
+                        voiceStopped += true
+                    }
+
                     override suspend fun cancel() {
                         voiceCanceled += true
                     }
@@ -893,6 +897,19 @@ class PiAppCoordinatorTest {
         val state = harness.coordinator.state.value
         assertThat(state.sessions.getValue(SessionId(SESSION)).draft.typedText).isEmpty()
         assertThat(state.commandNotices[SessionId(SESSION)]).isEqualTo(CommandNoticeUiState.Acknowledged)
+    }
+
+    @Test
+    fun `voice controls route stop and cancel to the local capture port`() = runHarnessTest(
+        profiles = FakeProfileStore(trustedProfile()),
+    ) { harness ->
+        readyForCommand(harness)
+        harness.coordinator.submit(AppIntent.DetailEvent(SessionId(SESSION), SessionDetailEvent.StopVoice))
+        harness.coordinator.submit(AppIntent.DetailEvent(SessionId(SESSION), SessionDetailEvent.CancelVoice))
+        advanceUntilIdle()
+
+        assertThat(harness.voiceStopped).containsExactly(true)
+        assertThat(harness.voiceCanceled).containsExactly(true)
     }
 
     @Test

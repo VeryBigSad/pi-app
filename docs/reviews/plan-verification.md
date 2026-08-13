@@ -166,7 +166,7 @@ No unresolved architectural P0/P1 remains. Implementation gates from earlier rev
 
 1. Independent DAL/signing fingerprint review, release-key off-machine backup, account protection, and rotation evidence.
 2. Physical Bitwarden/input/microphone/Keystore/ntfy/Doze/OEM evidence. API 34+ and no-Google AVD lanes also still lack executed runs.
-3. Macrobenchmark/performance suite (R5) is not implemented; budgets are unverified assertions.
+3. Macrobenchmark/Baseline Profile harness (R5) exists, but no benchmark result has been executed; budgets remain unverified assertions and require Pixel-class physical evidence.
 4. Reviewed Terraform plan/cost and isolated creation of the one dedicated VM, plus remote relay/ntfy E2E.
 5. SBOM/licenses supply-chain job, signed release artifacts, and destroy/orphan proof.
 6. Final dual review of the as-built system and fixes.
