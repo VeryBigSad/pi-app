@@ -15,6 +15,7 @@ import kotlinx.collections.immutable.persistentMapOf
 enum class AppPasskeyAvailability {
     CHECKING,
     AVAILABLE,
+    CANDIDATE_AVAILABLE,
     UNAVAILABLE,
 }
 

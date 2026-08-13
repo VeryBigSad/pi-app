@@ -12,8 +12,8 @@ Credential Manager passkeys do not imply a credential provider is present. On An
 Keep `minSdk 29`, but scope runtime support explicitly:
 
 - API 29–33 requires current Google Play services/Google Password Manager for production passkey registration and assertion.
-- API 34+ may use a compatible third-party Credential Manager provider; Bitwarden is the designated no-Google provider for the still-blocked physical release test. Discovery counts bounded eligible provider-service candidates only; Android Credential Manager, not Pi Mobile, resolves the enabled provider during a ceremony. A relying party must not call the provider-self-only `isEnabledCredentialProviderService` API for a third-party component.
-- If no compatible provider exists, the app remains locked and shows setup guidance. It does not fall back to password, biometric-only, debug credentials, or device certificate alone.
+- API 34+ may use a compatible third-party Credential Manager provider; Bitwarden is the designated no-Google provider for the still-blocked physical release test. Discovery counts bounded manifest-eligible Credential Provider services only; it cannot establish third-party enablement or passkey capability. Android Credential Manager, not Pi Mobile, resolves the enabled compatible provider during a ceremony. A relying party must not call the provider-self-only `isEnabledCredentialProviderService` API for a third-party component.
+- If no candidate exists, the app remains locked with setup guidance. When only a candidate exists, the app remains locked and asks Credential Manager to resolve it; a provider-configuration failure directs the user to system settings. It does not fall back to password, biometric-only, debug credentials, or device certificate alone.
 - The no-Google notification claim means the UnifiedPush/ntfy transport itself has no Google dependency. A fully usable no-Google production configuration additionally requires API 34+ and an installed third-party passkey provider.
 - AOSP emulator lanes use a debug-only fake credential provider to test transport/push mechanics; they do not satisfy production passkey acceptance.
 

@@ -25,6 +25,12 @@ sealed interface PasskeyProviderAvailability {
         }
     }
 
+    data class Candidate(val guidance: String) : PasskeyProviderAvailability {
+        init {
+            require(guidance.isNotBlank())
+        }
+    }
+
     data class Unavailable(val guidance: String) : PasskeyProviderAvailability {
         init {
             require(guidance.isNotBlank())
@@ -540,6 +546,13 @@ private fun authenticationLock(
         title = "Unlock with passkey",
         explanation = "$prefix Continue with ${provider.providerName}. There is no password or biometric-only fallback.",
         action = LockAction.AUTHENTICATE,
+    )
+
+    is PasskeyProviderAvailability.Candidate -> SessionContentAccess.Locked(
+        title = "Unlock with passkey",
+        explanation = "$prefix ${provider.guidance} If Android reports that no provider is configured, enable one in system settings. Session data stays locked.",
+        action = LockAction.AUTHENTICATE,
+        code = "PASSKEY_PROVIDER_CANDIDATE",
     )
 
     is PasskeyProviderAvailability.Unavailable -> SessionContentAccess.Locked(

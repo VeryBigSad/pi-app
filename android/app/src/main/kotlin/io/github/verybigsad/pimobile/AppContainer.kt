@@ -332,6 +332,7 @@ class AppContainer(
         return when (application.passkeyBridge.availability()) {
             null -> AppPasskeyAvailability.CHECKING
             is io.github.verybigsad.pimobile.security.PasskeyAvailability.Available -> AppPasskeyAvailability.AVAILABLE
+            is io.github.verybigsad.pimobile.security.PasskeyAvailability.CandidateAvailable -> AppPasskeyAvailability.CANDIDATE_AVAILABLE
             is io.github.verybigsad.pimobile.security.PasskeyAvailability.Locked -> AppPasskeyAvailability.UNAVAILABLE
         }
     }

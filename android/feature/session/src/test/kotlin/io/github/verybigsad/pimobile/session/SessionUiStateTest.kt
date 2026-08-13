@@ -56,6 +56,30 @@ class SessionUiStateTest {
     }
 
     @Test
+    fun candidateProviderDelegatesResolutionAndKeepsSessionLocked() {
+        val access = resolveSessionContentAccess(
+            trust = trust,
+            connection = ConnectionState.DeviceAuthenticated(
+                path = TransportPath.RELAY,
+                macId = macId,
+                deviceAuthentication = MutualTlsAuthentication("cert", now),
+            ),
+            passkeyProvider = PasskeyProviderAvailability.Candidate("Android Credential Manager will resolve it."),
+            retainedAuthentication = null,
+            nowEpochMillis = now,
+        )
+
+        assertThat(access).isEqualTo(
+            SessionContentAccess.Locked(
+                title = "Unlock with passkey",
+                explanation = "The Mac recognized this device, but user authentication is still required. Android Credential Manager will resolve it. If Android reports that no provider is configured, enable one in system settings. Session data stays locked.",
+                action = LockAction.AUTHENTICATE,
+                code = "PASSKEY_PROVIDER_CANDIDATE",
+            ),
+        )
+    }
+
+    @Test
     fun provisionalPairingNeverExposesSessionData() {
         val access = resolveSessionContentAccess(
             trust = trust,
