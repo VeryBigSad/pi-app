@@ -13,7 +13,7 @@ Application ID: `io.github.verybigsad.pimobile` · `minSdk 29` · Passkey RP: `v
 - Answers Pi's real interactive dialogs (`select`, `confirm`, `input`, `editor`) as native mobile UI.
 - Gates destructive tool/user-bash calls on their final extension-mutated arguments through a fail-closed Mac broker (`mac/approval`, `mac/pi-patch`, `mac/preload`).
 - Pre-routes manifest-known custom-TUI invocations to real terminal mode, because RPC returns no detectable `ctx.ui.custom()` event.
-- Notifies on completion without FCM, via UnifiedPush and a self-hosted ntfy distributor. Full no-Google use requires Android 14+ and a compatible third-party passkey provider such as Bitwarden; API 29–33 still needs Play services for passkey auth.
+- Notifies on completion without FCM, via UnifiedPush and a self-hosted ntfy distributor. Full no-Google use requires Android 14+ and a compatible third-party passkey provider such as Bitwarden; Android Credential Manager resolves that provider during the ceremony. API 29–33 still needs Play services for passkey auth.
 - Dictates into the composer with Groq `whisper-large-v3-turbo`, with `~/.groq_key` never leaving the Mac.
 - Surfaces agent activity (subagent fleet state) in a dedicated agents insight screen.
 - Self-updates via an assisted, human-approved updater: signed metadata feed, monotonic `versionCode` high-water mark, and an APK signing-certificate pin. See [ADR-0020](docs/adr/0020-secure-self-update.md).

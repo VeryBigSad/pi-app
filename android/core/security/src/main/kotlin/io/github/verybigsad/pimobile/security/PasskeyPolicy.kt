@@ -25,7 +25,7 @@ enum class PasskeyLockReason {
 sealed interface PasskeyAvailability {
     data class Available(
         val kind: PasskeyProviderKind,
-        val enabledProviderCount: Int,
+        val providerCandidateCount: Int,
         val supportsThirdPartyProviders: Boolean,
     ) : PasskeyAvailability
 
@@ -36,20 +36,20 @@ object PasskeyProviderMatrix {
     fun evaluate(
         sdkInt: Int,
         playServicesAvailable: Boolean,
-        enabledFrameworkProviderCount: Int,
+        frameworkProviderCandidateCount: Int,
     ): PasskeyAvailability {
         require(sdkInt >= 29)
-        require(enabledFrameworkProviderCount >= 0)
+        require(frameworkProviderCandidateCount >= 0)
         return if (sdkInt <= 33) {
             if (playServicesAvailable) {
                 PasskeyAvailability.Available(PasskeyProviderKind.PLAY_SERVICES, 1, false)
             } else {
                 PasskeyAvailability.Locked(PasskeyLockReason.PLAY_SERVICES_PROVIDER_REQUIRED)
             }
-        } else if (enabledFrameworkProviderCount > 0) {
+        } else if (frameworkProviderCandidateCount > 0) {
             PasskeyAvailability.Available(
                 PasskeyProviderKind.FRAMEWORK,
-                enabledFrameworkProviderCount,
+                frameworkProviderCandidateCount,
                 true,
             )
         } else {

@@ -83,6 +83,28 @@ class PasskeyPolicyTest {
     }
 
     @Test
+    fun frameworkProviderCandidatesIncludeForeignProviderServices() {
+        val bitwarden = CredentialProviderServiceDescriptor(
+            packageName = "com.x8bit.bitwarden",
+            className = "com.x8bit.bitwarden.CredentialProviderService",
+            permission = "android.permission.BIND_CREDENTIAL_PROVIDER_SERVICE",
+        )
+        assertThat(
+            countFrameworkProviderCandidates(
+                listOf(
+                    bitwarden,
+                    bitwarden,
+                    CredentialProviderServiceDescriptor(
+                        packageName = "com.example.ineligible",
+                        className = "com.example.ineligible.Service",
+                        permission = "android.permission.BIND_JOB_SERVICE",
+                    ),
+                ),
+            ),
+        ).isEqualTo(1)
+    }
+
+    @Test
     fun productionIdentityIsFrozen() {
         assertThat(PasskeyIdentity.PackageName).isEqualTo("io.github.verybigsad.pimobile")
         assertThat(PasskeyIdentity.RpId).isEqualTo("verybigsad.github.io")
