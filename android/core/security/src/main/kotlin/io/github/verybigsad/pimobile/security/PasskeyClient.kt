@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.service.credentials.CredentialProviderService
+import androidx.annotation.RequiresApi
 import androidx.credentials.CreatePublicKeyCredentialRequest
 import androidx.credentials.CreatePublicKeyCredentialResponse
 import androidx.credentials.CredentialManager
@@ -83,8 +84,8 @@ class PasskeyClient(private val activity: Activity) : PasskeyCeremonyPerformer {
         PasskeyDebugHooks.executor?.let { executor ->
             return executeDebug(PasskeyCeremony.REGISTRATION, request) { executor.createCredential(optionsJson) }
         }
-        val unavailable = availability() as? PasskeyAvailability.Locked
-        if (unavailable != null) return PasskeyResult.Locked(unavailable.reason)
+        val availability = availability()
+        if (availability is PasskeyAvailability.Locked) return PasskeyResult.Locked(availability.reason)
         return try {
             val response = manager.createCredential(
                 context = activity,
@@ -116,8 +117,8 @@ class PasskeyClient(private val activity: Activity) : PasskeyCeremonyPerformer {
         PasskeyDebugHooks.executor?.let { executor ->
             return executeDebug(PasskeyCeremony.ASSERTION, request) { executor.getCredential(optionsJson) }
         }
-        val unavailable = availability() as? PasskeyAvailability.Locked
-        if (unavailable != null) return PasskeyResult.Locked(unavailable.reason)
+        val availability = availability()
+        if (availability is PasskeyAvailability.Locked) return PasskeyResult.Locked(availability.reason)
         return try {
             val response = manager.getCredential(
                 context = activity,
@@ -190,16 +191,24 @@ internal object PasskeyProviderProbe {
         PasskeyProviderMatrix.evaluate(Build.VERSION.SDK_INT, false, providerCandidates)
     }
 
+    @RequiresApi(34)
     @Suppress("DEPRECATION")
     private fun frameworkProviderCandidates(context: Context): Int {
         val services = context.packageManager.queryIntentServices(
             Intent(CredentialProviderService.SERVICE_INTERFACE),
-            android.content.pm.PackageManager.MATCH_ALL,
+            android.content.pm.PackageManager.MATCH_ALL or android.content.pm.PackageManager.GET_META_DATA,
         )
         require(services.size <= 64)
         return countFrameworkProviderCandidates(services.mapNotNull { info ->
             val service = info.serviceInfo ?: return@mapNotNull null
-            CredentialProviderServiceDescriptor(service.packageName, service.name, service.permission)
+            CredentialProviderServiceDescriptor(
+                packageName = service.packageName,
+                className = service.name,
+                permission = service.permission,
+                enabled = service.enabled,
+                exported = service.exported,
+                hasCredentialProviderMetadata = service.metaData?.containsKey("android.credentials.provider") == true,
+            )
         })
     }
 }
@@ -208,6 +217,9 @@ internal data class CredentialProviderServiceDescriptor(
     val packageName: String,
     val className: String,
     val permission: String?,
+    val enabled: Boolean,
+    val exported: Boolean,
+    val hasCredentialProviderMetadata: Boolean,
 )
 
 internal fun countFrameworkProviderCandidates(
@@ -215,6 +227,9 @@ internal fun countFrameworkProviderCandidates(
 ): Int = services.asSequence()
     .filter {
         it.permission == "android.permission.BIND_CREDENTIAL_PROVIDER_SERVICE"
+            && it.enabled
+            && it.exported
+            && it.hasCredentialProviderMetadata
             && it.packageName.isNotBlank()
             && it.className.isNotBlank()
     }

@@ -10,7 +10,7 @@ The stable Android release is a manual, main-only `workflow_dispatch` through `.
 - Android package: exactly `io.github.verybigsad.pimobile`.
 - Signing alias: `PI_MOBILE_KEY_ALIAS`; defaults to `pimobile-release` when unset.
 
-`v0.1.0` with `versionCode=1` remains a valid first release when no release has been published. Every later release must use a `versionCode` greater than every immutable release's attached `update-v1.json`. Existing drafts, mutable releases, missing metadata assets, reused tags, duplicate version codes, and feed rollback all fail closed.
+The current canonical version is `v0.1.1` / `versionCode=2`; every later release must use a `versionCode` greater than every immutable release's attached `update-v1.json`. Existing drafts, mutable releases, missing metadata assets, reused tags, duplicate version codes, and feed rollback all fail closed.
 
 ## Required GitHub configuration
 
@@ -40,7 +40,7 @@ For local signing, run Gradle through the Keychain-backed wrapper without printi
 
 ```bash
 scripts/release-signing-env ./gradlew --no-daemon :android:app:assembleRelease
-node scripts/verify-release-identity.mjs android/app/build/outputs/apk/release/app-release.apk --tag v0.1.0
+node scripts/verify-release-identity.mjs android/app/build/outputs/apk/release/app-release.apk --tag v0.1.1
 ```
 
 The helper expects the keystore at `~/Library/Application Support/PiMobile/signing/release.jks` and the password in the `io.github.verybigsad.pimobile.signing` generic-password Keychain item for the current user. It exports values only to the wrapped command; it emits no secret text.

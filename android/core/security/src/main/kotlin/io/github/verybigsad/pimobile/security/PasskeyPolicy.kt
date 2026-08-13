@@ -29,6 +29,10 @@ sealed interface PasskeyAvailability {
         val supportsThirdPartyProviders: Boolean,
     ) : PasskeyAvailability
 
+    data class CandidateAvailable(
+        val providerCandidateCount: Int,
+    ) : PasskeyAvailability
+
     data class Locked(val reason: PasskeyLockReason) : PasskeyAvailability
 }
 
@@ -47,11 +51,7 @@ object PasskeyProviderMatrix {
                 PasskeyAvailability.Locked(PasskeyLockReason.PLAY_SERVICES_PROVIDER_REQUIRED)
             }
         } else if (frameworkProviderCandidateCount > 0) {
-            PasskeyAvailability.Available(
-                PasskeyProviderKind.FRAMEWORK,
-                frameworkProviderCandidateCount,
-                true,
-            )
+            PasskeyAvailability.CandidateAvailable(frameworkProviderCandidateCount)
         } else {
             PasskeyAvailability.Locked(PasskeyLockReason.FRAMEWORK_PROVIDER_REQUIRED)
         }

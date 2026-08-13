@@ -75,7 +75,7 @@ class PasskeyPolicyTest {
             PasskeyAvailability.Locked(PasskeyLockReason.PLAY_SERVICES_PROVIDER_REQUIRED),
         )
         assertThat(PasskeyProviderMatrix.evaluate(34, false, 1)).isEqualTo(
-            PasskeyAvailability.Available(PasskeyProviderKind.FRAMEWORK, 1, true),
+            PasskeyAvailability.CandidateAvailable(1),
         )
         assertThat(PasskeyProviderMatrix.evaluate(36, true, 0)).isEqualTo(
             PasskeyAvailability.Locked(PasskeyLockReason.FRAMEWORK_PROVIDER_REQUIRED),
@@ -88,6 +88,9 @@ class PasskeyPolicyTest {
             packageName = "com.x8bit.bitwarden",
             className = "com.x8bit.bitwarden.CredentialProviderService",
             permission = "android.permission.BIND_CREDENTIAL_PROVIDER_SERVICE",
+            enabled = true,
+            exported = true,
+            hasCredentialProviderMetadata = true,
         )
         assertThat(
             countFrameworkProviderCandidates(
@@ -98,6 +101,33 @@ class PasskeyPolicyTest {
                         packageName = "com.example.ineligible",
                         className = "com.example.ineligible.Service",
                         permission = "android.permission.BIND_JOB_SERVICE",
+                        enabled = true,
+                        exported = true,
+                        hasCredentialProviderMetadata = false,
+                    ),
+                    CredentialProviderServiceDescriptor(
+                        packageName = "com.example.disabled",
+                        className = "com.example.disabled.Service",
+                        permission = "android.permission.BIND_CREDENTIAL_PROVIDER_SERVICE",
+                        enabled = false,
+                        exported = true,
+                        hasCredentialProviderMetadata = true,
+                    ),
+                    CredentialProviderServiceDescriptor(
+                        packageName = "com.example.private",
+                        className = "com.example.private.Service",
+                        permission = "android.permission.BIND_CREDENTIAL_PROVIDER_SERVICE",
+                        enabled = true,
+                        exported = false,
+                        hasCredentialProviderMetadata = true,
+                    ),
+                    CredentialProviderServiceDescriptor(
+                        packageName = "com.example.no-metadata",
+                        className = "com.example.no-metadata.Service",
+                        permission = "android.permission.BIND_CREDENTIAL_PROVIDER_SERVICE",
+                        enabled = true,
+                        exported = true,
+                        hasCredentialProviderMetadata = false,
                     ),
                 ),
             ),

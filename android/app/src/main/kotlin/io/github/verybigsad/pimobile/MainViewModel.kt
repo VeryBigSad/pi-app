@@ -156,6 +156,9 @@ class MainViewModel(
 private fun AppPasskeyAvailability.toUi(): PasskeyProviderAvailability = when (this) {
     AppPasskeyAvailability.CHECKING -> PasskeyProviderAvailability.Checking
     AppPasskeyAvailability.AVAILABLE -> PasskeyProviderAvailability.Available("the device passkey provider")
+    AppPasskeyAvailability.CANDIDATE_AVAILABLE -> PasskeyProviderAvailability.Candidate(
+        "A passkey provider may be available. Continue to let Android Credential Manager resolve it.",
+    )
     AppPasskeyAvailability.UNAVAILABLE -> PasskeyProviderAvailability.Unavailable(
         "No compatible passkey provider is available on this device.",
     )
