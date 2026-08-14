@@ -1,11 +1,15 @@
 package io.github.verybigsad.pimobile
 
+import android.view.WindowManager
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import io.github.verybigsad.pimobile.model.MacId
+import io.github.verybigsad.pimobile.model.TrustState
 import io.github.verybigsad.pimobile.testing.AppLaunchTestBridge
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
@@ -32,6 +36,24 @@ class AppLaunchTest {
             }.isSuccess
         }
         composeRule.onNodeWithText("Pair a Mac").assertIsDisplayed()
+    }
+
+    @Test
+    fun systemScreenshotsRemainEnabledForTrustedState() {
+        composeRule.runOnUiThread {
+            val window = composeRule.activity.window
+            window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            ScreenCapturePolicy.apply(
+                window,
+                TrustState.Trusted(
+                    macId = MacId("00000000-0000-4000-8000-000000000001"),
+                    macDisplayName = "Test Mac",
+                    certificateSerial = "01",
+                    certificateNotAfterEpochMillis = Long.MAX_VALUE,
+                ),
+            )
+            assertEquals(0, window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE)
+        }
     }
 
     @Test

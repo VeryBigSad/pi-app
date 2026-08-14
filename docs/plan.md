@@ -1,7 +1,7 @@
 # Pi Mobile 1.0 master plan
 
 Last updated: 2026-08-12
-Status: implementation complete across all planned modules; verification in progress. `npm run check` green (372 tests), Gradle aggregate green (545 unit test executions), API 29 instrumentation green (113 tests, `emulator-5590`). API 34+ lanes, no-Google lanes, Macrobenchmarks, cloud apply, and all physical-device gates remain open. Release and cloud apply stay NO-GO until the open gates in [requirements-traceability.md](requirements-traceability.md) close.
+Status: implementation complete across all planned modules; verification in progress. `npm run check` green (372 tests), Gradle aggregate green (545 unit test executions), API 29 instrumentation green (113 tests, `emulator-5590`). API 34+ lanes, no-Google lanes, Macrobenchmarks, cloud apply, and the remaining physical-device matrix stay open; Pixel 8 Pro + Bitwarden registration/certificate issuance is verified. Release and cloud apply stay NO-GO until the open gates in [requirements-traceability.md](requirements-traceability.md) close.
 
 ## Definition of done
 

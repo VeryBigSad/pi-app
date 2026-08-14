@@ -82,12 +82,7 @@ class WebSocketBinaryByteChannel private constructor(
 
     override suspend fun close() {
         if (closed.compareAndSet(false, true)) {
-            writeMutex.withLock {
-                withContext(Dispatchers.IO) {
-                    runCatching { writeFrame(OPCODE_CLOSE, byteArrayOf(0x03, 0xe8.toByte())) }
-                    socket.close()
-                }
-            }
+            withContext(Dispatchers.IO) { socket.close() }
         }
     }
 

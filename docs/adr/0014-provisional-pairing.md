@@ -17,4 +17,4 @@ DAL publishes both `delegate_permission/common.get_login_creds` and `delegate_pe
 
 ## Consequences
 
-Cross-connection/CSR/invitation replay, registration-versus-assertion confusion, premature mTLS/application data, and missing local confirmation fail closed. Live DAL now verifies both relations; independent fingerprint review and physical release-signed Bitwarden remain gates.
+Cross-connection/CSR/invitation replay, registration-versus-assertion confusion, premature mTLS/application data, and missing local confirmation fail closed. Live DAL now verifies both relations. Pixel 8 Pro + release-signed Bitwarden registration/certificate issuance is verified; steady-state auth-to-sync and independent fingerprint review remain gates.

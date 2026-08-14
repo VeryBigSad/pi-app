@@ -6,6 +6,7 @@ import javax.net.ssl.SSLEngine
 import javax.net.ssl.SSLEngineResult
 import javax.net.ssl.SSLException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -34,18 +35,22 @@ class TlsByteChannel internal constructor(
     private val underlying: DuplexByteChannel,
     private val engine: SSLEngine,
     private val carryover: TlsHandshakeCarryover,
+    dispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val beforeEngineUnwrap: () -> Unit = {},
 ) : DuplexByteChannel {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val outbound = Channel<ByteArray>(128)
+    private val encryptedOutbound = Channel<ByteArray>(MAX_CHANNEL_QUEUE_BYTES / MAX_TLS_BUFFER_BYTES)
     private val inbound = Channel<ByteArray>(128)
     private val inboundProgress = Channel<Unit>(Channel.CONFLATED)
     private val readMutex = Mutex()
-    private val wrapMutex = Mutex()
+    private val engineLock = Any()
     private val closed = AtomicBoolean(false)
     private var pending = ByteArray(0)
     private var pendingOffset = 0
 
     init {
+        scope.launch { egressLoop() }
         scope.launch { wrapLoop() }
         scope.launch { unwrapLoop() }
     }
@@ -99,21 +104,25 @@ class TlsByteChannel internal constructor(
         label: String = TlsExporterLabel,
         context: ByteArray = ByteArray(0),
         length: Int = TlsExporterBytes,
-    ): ByteArray = TlsExporter.export(engine, label, context, length)
+    ): ByteArray = synchronized(engineLock) { TlsExporter.export(engine, label, context, length) }
 
     override suspend fun close() {
         if (!closed.compareAndSet(false, true)) return
         outbound.close()
-        runCatching {
-            wrapMutex.withLock {
-                engine.closeOutbound()
-                emitWrap(EMPTY_BUFFER.duplicate())
-            }
-        }
+        encryptedOutbound.close()
+        synchronized(engineLock) { engine.closeOutbound() }
         inbound.close()
         inboundProgress.close()
         scope.cancel()
         underlying.close()
+    }
+
+    private suspend fun egressLoop() {
+        try {
+            for (bytes in encryptedOutbound) underlying.write(bytes)
+        } catch (error: Exception) {
+            fail(error)
+        }
     }
 
     private suspend fun wrapLoop() {
@@ -121,7 +130,7 @@ class TlsByteChannel internal constructor(
             for (bytes in outbound) {
                 val source = ByteBuffer.wrap(bytes)
                 while (source.hasRemaining()) {
-                    val status = wrapMutex.withLock { emitWrap(source) }
+                    val status = emitWrap(source)
                     if (status == SSLEngineResult.HandshakeStatus.NEED_UNWRAP && source.hasRemaining()) {
                         awaitInboundProgress()
                     }
@@ -147,7 +156,20 @@ class TlsByteChannel internal constructor(
         }
     }
 
-    private suspend fun emitWrap(source: ByteBuffer): SSLEngineResult.HandshakeStatus {
+    private fun emitWrap(source: ByteBuffer): SSLEngineResult.HandshakeStatus = synchronized(engineLock) {
+        val outcome = wrapEngine(source)
+        queueEncrypted(outcome.encrypted)
+        outcome.handshakeStatus
+    }
+
+    private fun queueEncrypted(bytes: ByteArray) {
+        if (bytes.isEmpty()) return
+        if (encryptedOutbound.trySend(bytes).isFailure) {
+            throw NetworkException(NetworkError.TRANSPORT_EXHAUSTED, "TLS encrypted egress queue is full")
+        }
+    }
+
+    private fun wrapEngine(source: ByteBuffer): WrapOutcome {
         var target = ByteBuffer.allocate(tlsBufferSize(engine.session.packetBufferSize, 1_024))
         while (true) {
             target.clear()
@@ -155,22 +177,19 @@ class TlsByteChannel internal constructor(
             when (result.status) {
                 SSLEngineResult.Status.OK, SSLEngineResult.Status.CLOSED -> {
                     target.flip()
-                    if (target.hasRemaining()) underlying.write(target.toByteArray())
+                    val encrypted = if (target.hasRemaining()) target.toByteArray() else ByteArray(0)
+                    rejectPostHandshakeTask(result.handshakeStatus)
+                    return WrapOutcome(result.handshakeStatus, encrypted)
                 }
-                SSLEngineResult.Status.BUFFER_OVERFLOW -> {
-                    target = grow(target)
-                    continue
-                }
+                SSLEngineResult.Status.BUFFER_OVERFLOW -> target = grow(target)
                 SSLEngineResult.Status.BUFFER_UNDERFLOW -> tlsFailure("TLS wrap underflow")
             }
-            runTasks(result.handshakeStatus, engine)
-            return result.handshakeStatus
         }
     }
 
     private suspend fun unwrapLoop() {
-        var encrypted = ByteBuffer.allocate(tlsBufferSize(engine.session.packetBufferSize, MAX_CHANNEL_CHUNK_BYTES))
-        var clear = ByteBuffer.allocate(tlsBufferSize(engine.session.applicationBufferSize, MAX_CHANNEL_CHUNK_BYTES))
+        var encrypted = ByteBuffer.allocate(packetBufferSize(MAX_CHANNEL_CHUNK_BYTES))
+        var clear = ByteBuffer.allocate(applicationBufferSize(MAX_CHANNEL_CHUNK_BYTES))
         val chunk = ByteArray(MAX_CHANNEL_CHUNK_BYTES)
         try {
             if (carryover.decrypted.isNotEmpty()) {
@@ -192,7 +211,7 @@ class TlsByteChannel internal constructor(
                 val count = underlying.read(chunk)
                 if (count == -1) {
                     try {
-                        engine.closeInbound()
+                        synchronized(engineLock) { engine.closeInbound() }
                     } catch (error: SSLException) {
                         throw NetworkException(NetworkError.TLS_HANDSHAKE_FAILED, "TLS stream was truncated", error)
                     }
@@ -215,8 +234,13 @@ class TlsByteChannel internal constructor(
     private suspend fun drainEncrypted(encrypted: ByteBuffer, clearInput: ByteBuffer): Boolean {
         var clear = clearInput
         while (encrypted.hasRemaining()) {
-            val result = engine.unwrap(encrypted, clear)
-            when (result.status) {
+            beforeEngineUnwrap()
+            val outcome = synchronized(engineLock) {
+                val result = engine.unwrap(encrypted, clear)
+                rejectPostHandshakeTask(result.handshakeStatus)
+                UnwrapOutcome(result.status, result.handshakeStatus, result.bytesConsumed())
+            }
+            when (outcome.status) {
                 SSLEngineResult.Status.OK -> Unit
                 SSLEngineResult.Status.BUFFER_UNDERFLOW -> break
                 SSLEngineResult.Status.BUFFER_OVERFLOW -> {
@@ -229,14 +253,27 @@ class TlsByteChannel internal constructor(
                     return true
                 }
             }
-            runTasks(result.handshakeStatus, engine)
-            if (result.bytesConsumed() > 0) inboundProgress.trySend(Unit)
-            if (result.handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_WRAP) {
-                wrapMutex.withLock { emitWrap(EMPTY_BUFFER.duplicate()) }
+            if (outcome.bytesConsumed > 0) inboundProgress.trySend(Unit)
+            if (outcome.handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_WRAP) {
+                emitWrap(EMPTY_BUFFER.duplicate())
             }
             flushClear(clear)
         }
         return false
+    }
+
+    private fun rejectPostHandshakeTask(status: SSLEngineResult.HandshakeStatus) {
+        if (status == SSLEngineResult.HandshakeStatus.NEED_TASK) {
+            tlsFailure("TLS post-handshake delegated task is unsupported")
+        }
+    }
+
+    private fun packetBufferSize(minimum: Int): Int = synchronized(engineLock) {
+        tlsBufferSize(engine.session.packetBufferSize, minimum)
+    }
+
+    private fun applicationBufferSize(minimum: Int): Int = synchronized(engineLock) {
+        tlsBufferSize(engine.session.applicationBufferSize, minimum)
     }
 
     private suspend fun flushClear(buffer: ByteBuffer) {
@@ -253,9 +290,21 @@ class TlsByteChannel internal constructor(
         }
     }
 
+    private data class WrapOutcome(
+        val handshakeStatus: SSLEngineResult.HandshakeStatus,
+        val encrypted: ByteArray,
+    )
+
+    private data class UnwrapOutcome(
+        val status: SSLEngineResult.Status,
+        val handshakeStatus: SSLEngineResult.HandshakeStatus,
+        val bytesConsumed: Int,
+    )
+
     private suspend fun fail(error: Throwable) {
         if (closed.compareAndSet(false, true)) {
             outbound.close(error)
+            encryptedOutbound.close(error)
             inbound.close(error)
             inboundProgress.close()
             runCatching { underlying.close() }

@@ -2,7 +2,7 @@
 
 Native Android control surface for the Pi coding agent running on your Mac. The Mac keeps every credential, runs Pi, and owns session truth; the phone is a fast, secure client for triage, steering, review, and dictation.
 
-> **Status: live end-to-end core path proven 2026-08-12 against the real YC deployment.** The full module set exists: protocol schemas/codecs, Mac host daemon (Pi runtime, journal, sync, pairing, terminal, voice, push), Android core (protocol, network, security, storage, push, voice, update) and features (session, agents, settings), the xterm terminal module, the Go relay, and hardened Terraform. Verified live: YC deployment (VM, registry, sslip.io TLS 1.3, signed in-place update rollout), full pairing ceremony E2E on an API 29 emulator over the relay rendezvous, steady-state mTLS reconnect to READY, and the semantic round trip (phone message → journal → real Pi → LLM events → message.append) with a durable canonical log surviving daemon restarts. CI green: node/android/api29/api34-terminal/terraform/go + secret scan. **Physical-device gates, terminal-mode and voice E2E on device, and full timeline UI render evidence remain open.**
+> **Status: live end-to-end core path proven 2026-08-12 against the real YC deployment.** The full module set exists: protocol schemas/codecs, Mac host daemon (Pi runtime, journal, sync, pairing, terminal, voice, push), Android core (protocol, network, security, storage, push, voice, update) and features (session, agents, settings), the xterm terminal module, the Go relay, and hardened Terraform. Verified live: YC deployment (VM, registry, sslip.io TLS 1.3, signed in-place update rollout), full pairing ceremony E2E on an API 29 emulator over the relay rendezvous, steady-state mTLS reconnect to READY, and the semantic round trip (phone message → journal → real Pi → LLM events → message.append) with a durable canonical log surviving daemon restarts. Pixel 8 Pro + Bitwarden first-owner registration and certificate issuance were verified 2026-08-13; steady-state auth-to-sync retest remains open. CI green: node/android/api29/api34-terminal/terraform/go + secret scan. **Remaining physical-device matrix, terminal-mode and voice E2E on device, and full timeline UI render evidence remain open.**
 
 Application ID: `io.github.verybigsad.pimobile` · `minSdk 29` · Passkey RP: `verybigsad.github.io` · Pi baseline: 0.84.0 + reviewed patch
 
@@ -17,6 +17,7 @@ Application ID: `io.github.verybigsad.pimobile` · `minSdk 29` · Passkey RP: `v
 - Dictates into the composer with Groq `whisper-large-v3-turbo`, with `~/.groq_key` never leaving the Mac.
 - Surfaces agent activity (subagent fleet state) in a dedicated agents insight screen.
 - Self-updates via an assisted, human-approved updater: signed metadata feed, monotonic `versionCode` high-water mark, and an APK signing-certificate pin. See [ADR-0020](docs/adr/0020-secure-self-update.md).
+- Uses the Pi logo (`artwork/pi-logo-on-dark.svg`) for launcher icons and permits user screenshots plus OS-managed Recents previews; it never captures or uploads screen content itself.
 
 Both modes are release requirements and both are implemented: **semantic** (native UI over `pi --mode rpc`) and **terminal** (bundled xterm over a real PTY).
 
@@ -167,7 +168,7 @@ Open gates (none of these are satisfied; do not claim otherwise):
 - **Timeline live-render.** Streamed message content verified at the projection layer; full UI render evidence pending.
 - **Terminal-mode E2E on device** not run.
 - **Voice dictation E2E** with a real microphone not run.
-- **Physical-device gates all pending**: passkey ceremonies (API 29 Google Play services, API 34+ third-party provider such as Bitwarden), hardware-backed key, Doze/OEM battery behavior, Gboard/Bluetooth input, performance budgets. Emulator results are never physical evidence.
+- **Physical-device matrix incomplete**: Pixel 8 Pro + Bitwarden first-owner registration and certificate issuance are verified; steady-state auth-to-sync, API 29 Google Play services, hardware-backed key, Doze/OEM battery behavior, Gboard/Bluetooth input, and performance budgets remain pending. Emulator results are never physical evidence.
 - **GHCR package public visibility** (optional provenance path; runtime uses YC CR).
 - **Update feed publication** needs `RELEASE_PUBLISH_TOKEN`.
 - **Signing backup incomplete.** Dedicated EC release cert exists outside Git with mode-`0600` keystore and Keychain password; off-machine backup and rotation drill remain.
@@ -179,7 +180,7 @@ Full requirement-by-requirement evidence: [docs/requirements-traceability.md](do
 
 - Provider credentials, `~/.pi/agent/auth.json`, and `~/.groq_key` never leave the Mac. Verified: the key is mode `0600`, 57 bytes, untracked.
 - Passkeys authenticate the user; mTLS client certificates authenticate a paired device. Separate credentials, separate revocation.
-- TLS 1.3 only: QR-pinned server auth in restricted pairing, then checked/revoked mTLS on normal data. Pairing binds the passkey ceremony to the signed invitation (which carries `macInstanceId`) and the TLS exporter under label `EXPORTER-Pi-Mobile-Pairing-v1`. Relay sees metadata/ciphertext only.
+- TLS 1.3 only: QR-pinned server auth in restricted pairing, then checked/revoked mTLS on normal data. Pairing binds the passkey ceremony to the signed invitation (which carries `macInstanceId`) and the TLS exporter under label `EXPORTER-Pi-Mobile-Pairing-v1`. Android serializes mutable `SSLEngine` transitions and hands encrypted records to a bounded dedicated egress actor, so the read pump never performs transport writes. Relay sees metadata/ciphertext only.
 - Revoking a device certificate also revokes its relay route key and removes the device record; revoked peers are rejected at the next handshake and refused new relay rendezvous, so access ends within one handshake.
 - Mutations are journaled `ARMED` before the first Pi stdin byte. Recovered `ARMED` becomes `INDETERMINATE`; recovered `RECEIVED` stays dormant until the same id/hash is deliberately resubmitted over a current READY, user-authenticated connection and every guard is revalidated.
 - Approval is its own `approval.offer/decision/expired` protocol, never a Pi `confirm`. The patched final hook sees final mutated arguments; timeout, broker loss, disconnect, changed arguments, or classifier failure blocks and safely resumes the Pi turn. There is no "always allow".

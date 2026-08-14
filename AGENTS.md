@@ -66,7 +66,7 @@ Violating any of these is a release blocker, not a review nit.
 11. No production password, debug-certificate, biometric, device-certificate-only, or offline authentication bypass. Debug aids are `debug`-source-set only and loudly labeled. API 29–33 requires Play services for production passkeys; API 34+ may use Bitwarden/another compatible provider. On API 34+, only discover bounded eligible provider-service candidates; Credential Manager resolves the selected provider during the ceremony, and a relying party never uses provider-self-only enablement inspection on another app. No provider means locked; AOSP fake auth proves transport only.
 12. Terminal input is ephemeral and never replayed after uncertain delivery. A connected xterm retains 5,000 lines; reconnect restores only the visible pane and offers a separate bounded server-side `tmux capture-pane` history drawer—never claim full scrollback restoration. Terminal WebView loads local assets only, with strict CSP, no network/file access, an exact-origin channel, and release debugging off.
 13. ANSI control sequences in structured extension strings are removed or converted by an allowlisted parser before display.
-14. Logs and crash reports record stable codes and opaque ids only, never prompts, Pi raw payloads, terminal bytes, audio, credentials, or keys. Redaction has tests.
+14. Logs and crash reports record stable codes and opaque ids only, never prompts, Pi raw payloads, terminal bytes, audio, credentials, or keys. Redaction has tests. User screenshots and OS-managed Recents previews are intentionally allowed and may contain displayed content; the app never captures or uploads them automatically.
 15. `assetlinks.json` is generated from the real dedicated release signing configuration with both `delegate_permission/common.get_login_creds` and `delegate_permission/common.handle_all_urls`; CI asserts HTTP 200, `application/json`, no redirect, exact package/fingerprint/relations, and cross-checks the Digital Asset Links API. The Mac never expands its pinned Android origin from DAL.
 16. Arbitrary extension Node/fs/process side effects are not sandboxed and can bypass tool hooks; invocation classification and the final hook are guardrails, never a containment claim.
 
@@ -76,6 +76,7 @@ Violating any of these is a release blocker, not a review nit.
 
 - Immutable UI state, one state holder per screen, structured concurrency with explicit scopes.
 - No blocking work on the main thread: no network, database, JSON, crypto, markdown, or image work there.
+- Full-duplex TLS serializes every mutable `SSLEngine` operation; unexpected post-handshake delegated tasks fail closed. The engine lock never spans application transport I/O or channel backpressure. Encrypted writes use a bounded dedicated egress actor.
 - Lazy lists always pass a stable `key` and a `contentType`; the active streaming row is isolated.
 - Never emit a whole transcript per token. Coalesce outside composition and publish at frame cadence.
 - Cache expensive per-message derivations by message id plus content version.

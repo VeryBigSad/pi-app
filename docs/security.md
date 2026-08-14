@@ -1,6 +1,6 @@
 # Security design and threat model
 
-Last updated: 2026-08-11
+Last updated: 2026-08-13
 Status: implemented and unit/integration-tested as referenced in [requirements-traceability.md](requirements-traceability.md). Physical-device and live-remote evidence remain open gates.
 
 ## Security objectives
@@ -11,7 +11,7 @@ Status: implemented and unit/integration-tested as referenced in [requirements-t
 4. Replayed, reordered, changed, revoked, or cross-device commands fail closed.
 5. No production auth bypass exists.
 6. A phone-triggered destructive action is blocked until a real pre-execution decision.
-7. Logs, notifications, screenshots, backups, and crash reports do not leak content by default.
+7. Logs, notifications, backups, and crash reports do not leak content by default. User screenshots and OS-managed Recents previews are intentionally allowed disclosure surfaces and may contain displayed content.
 
 Non-goal: Pi and extensions are not sandboxed. Tool paths are gated, but direct extension Node/fs/process code still runs with Mac-user privileges.
 
@@ -123,7 +123,7 @@ Routine reads/builds/tests do not prompt. No “always allow” or generic appro
 - TLS and route-auth private keys: Android Keystore, separate/non-exportable; inspect `KeyInfo` without overclaiming StrongBox.
 - App cache/drafts: Room + SQLCipher; database key wrapped by Keystore.
 - `android:allowBackup="false"`; exclude sensitive files from device transfer where applicable.
-- Recents preview is blank/redacted while locked; release screenshots are blocked on sensitive screens.
+- Per [ADR-0021](adr/0021-system-screen-capture.md), user screenshots and OS-managed Recents previews are allowed. They may contain displayed session content; the app never captures, persists, or uploads them automatically.
 - Clipboard copy is explicit, time-limited where supported, and never automatic.
 - Crash reporting is opt-in and content-redacted; raw Pi/terminal/audio bodies are excluded.
 - Notification payloads contain an opaque random wake ID only. Detailed text is fetched over mTLS and shown only after unlock.

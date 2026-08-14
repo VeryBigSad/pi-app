@@ -160,7 +160,7 @@ Stale claims that must not be restated: that the Android SDK or AVDs are missing
 
 | Gap | Consequence |
 |---|---|
-| No physical Android device | Bitwarden/input/microphone/hardware/Doze/OEM/performance evidence blocked; substitutes are weaker. |
+| Physical-device matrix incomplete | Pixel 8 Pro + Bitwarden registration/certificate issuance is verified; steady-state auth-to-sync, input/microphone/hardware/Doze/OEM/performance evidence remains blocked; substitutes are weaker. |
 | Public DAL | Repository is deployed; root assetlinks returns 200 JSON/no redirect and Google DAL API resolves both relations. Independent fingerprint review remains. |
 | Release signing evidence | Dedicated EC cert now exists outside Git with Keychain password and published DAL fingerprint; local signed APK and live DAL/API match; independent review, off-machine/Bitwarden backup, and rotation drill remain. |
 | No Firebase credentials, by design | Optional adapter compile/fake tests are planned; live FCM is never a release gate. |

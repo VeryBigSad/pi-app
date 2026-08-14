@@ -6,7 +6,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -81,6 +80,9 @@ class MainActivity : ComponentActivity() {
             } else {
                 val state by viewModel.state.collectAsState()
                 val voicePermissionRequest = state.voicePermissionRequest
+                LaunchedEffect(state.trust) {
+                    ScreenCapturePolicy.apply(window, state.trust)
+                }
                 LaunchedEffect(voicePermissionRequest?.requestId) {
                     val request = voicePermissionRequest ?: return@LaunchedEffect
                     if (
@@ -90,13 +92,6 @@ class MainActivity : ComponentActivity() {
                         activeVoicePermissionRequestId = request.requestId
                         voicePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                     }
-                }
-                // Recents/thumbnails never show authenticated content.
-                val secure = state.trust is io.github.verybigsad.pimobile.model.TrustState.Trusted
-                if (secure) {
-                    window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
-                } else {
-                    window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
                 }
                 PiAppRoot(viewModel, activityActions())
             }

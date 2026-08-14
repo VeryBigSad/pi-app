@@ -21,5 +21,7 @@ Decision history for Pi Mobile 1.0 (supersession noted inline):
 17. [ADR-0017: Invocation-level terminal routing](0017-invocation-routing.md)
 18. [ADR-0018: Passkey provider compatibility](0018-passkey-provider-compatibility.md)
 19. [ADR-0019: Conservative API 36 build tuple](0019-build-toolchain.md)
+20. [ADR-0020: Secure self-update](0020-secure-self-update.md)
+21. [ADR-0021: Allow system screen capture](0021-system-screen-capture.md)
 
 An accepted ADR changes only through a superseding ADR. Contract changes also update schemas, fixtures, both implementations, and both independent reviews.

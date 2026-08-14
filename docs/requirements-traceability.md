@@ -21,6 +21,7 @@ General evidence anchors, not repeated per row:
 - API 29 instrumentation (113 tests, 0 failures, `emulator-5590`): `android/*/src/androidTest/**`.
 - Go relay suites: `relay/**/…_test.go`, green via `go test ./...`.
 - CI: `.github/workflows/ci.yml` (node, android, android-api29, api34-terminal, terraform, go), `dal.yml`, `relay-image.yml`, `secret-scan.yml`, `android-release.yml`; green history including secret scan.
+- v0.1.2 implementation/re-review evidence: `docs/reviews/v0.1.2-verification.md`; both model families report no remaining P0/P1/P2.
 
 ## Live E2E evidence (2026-08-12)
 
@@ -32,16 +33,16 @@ Proven against the real YC deployment with the API 29 emulator client over the r
 - Durable canonical log (`canonical.sqlite`): epochs/sequences survive daemon restarts; durable snapshots; respawn replay dedup.
 - Signed in-place `pimobile-update` rollout path exercised repeatedly.
 
-Honest remaining gates: multi-session sync completeness (session list may show a subset until the ack/fence loop converges; under work); timeline live-render of streamed content verified at projection layer only, full UI render evidence pending; terminal-mode E2E on device; voice dictation E2E with microphone; all physical-device gates; GHCR package public visibility (optional; runtime uses YC CR); update feed publication (needs `RELEASE_PUBLISH_TOKEN`).
+Additional physical evidence on 2026-08-13: Pixel 8 Pro + Bitwarden first-owner registration and certificate issuance over the live relay. Honest remaining gates: physical steady-state auth-to-sync retest; multi-session sync completeness (session list may show a subset until the ack/fence loop converges; under work); timeline live-render of streamed content verified at projection layer only, full UI render evidence pending; terminal-mode E2E on device; voice dictation E2E with microphone; remaining physical-device matrix; GHCR package public visibility (optional; runtime uses YC CR).
 
 ## Requirement to evidence
 
 | Req | Evidence | Status |
 |---|---|---|
-| R1 pairing ceremony (CSR-first, provisional server-auth, exporter binding) | `mac/host/test/security-ceremony.test.ts`, `mac/host/test/pairing-invitation.test.ts`, `mac/host/test/security-pki.test.ts`, `mac/host/test/inner-tls.test.ts`, `mac/host/test/direct-tls.test.ts`; Android: `android/core/network/src/test/.../PairingOrchestratorTest.kt`, `RelayPairingClientTest.kt`, `TlsExporterAndroidTest.kt` (instrumented); live E2E 2026-08-12 (see above) | verified-live (relay path, debug authenticator; physical provider ceremonies pending) |
+| R1 pairing ceremony (CSR-first, provisional server-auth, exporter binding) | `mac/host/test/security-ceremony.test.ts`, `mac/host/test/pairing-invitation.test.ts`, `mac/host/test/security-pki.test.ts`, `mac/host/test/inner-tls.test.ts`, `mac/host/test/direct-tls.test.ts`; Android: `android/core/network/src/test/.../PairingOrchestratorTest.kt`, `RelayPairingClientTest.kt`, `TlsExporterAndroidTest.kt` (instrumented); live relay E2E 2026-08-12 and Pixel 8 Pro + Bitwarden registration/certificate issuance 2026-08-13 | verified-live (emulator full path; physical registration and certificate issuance) |
 | R1 session list fidelity | `mac/host/test/session-service.test.ts`, `mac/host/src/daemon/session-service.ts`; live: session list over relay, `session.catalog` push, snapshot union on resume | verified-live; multi-session completeness under work |
 | R1 exact resync / idle fence / canonical snapshot | `mac/host/test/canonical-snapshot.test.ts`, `mac/host/test/gateway-sync.test.ts`, `mac/host/src/sync/canonical-snapshot.ts`; live: durable `canonical.sqlite` survives daemon restarts, replay dedup | verified-live |
-| R1 reconnect durability | `mac/host/test/relay-tunnel.test.ts`, `android/core/network/src/test/.../PathAndReconnectTest.kt`; live: device-data tunnel → mTLS → assertion → `READY`; 100-cycle soak not implemented | verified-live; soak **not-implemented** |
+| R1 reconnect durability | `mac/host/test/relay-tunnel.test.ts`, `android/core/network/src/test/.../PathAndReconnectTest.kt`, `TlsPostHandshakeWriteTest.kt` (serialized full-duplex engine transitions, bounded dedicated egress, inbound progress under blocked writes, bounded close); 100-cycle soak not implemented | verified-unit; physical Bitwarden auth-to-sync retest pending; soak **not-implemented** |
 | R1 leaf change convergence | covered within `canonical-snapshot.test.ts` fixtures | verified-unit |
 | R1 writer lease / mode handoff | `mac/host/src/daemon/terminal-runtime.ts`, `mac/host/test/terminal-backend.test.ts` | verified-unit |
 | R1 canonical recovery (append id vs leaf, backward branch) | `mac/host/test/canonical-snapshot.test.ts` | verified-unit |
@@ -64,7 +65,7 @@ Honest remaining gates: multi-session sync completeness (session list may show a
 | R3 terminal engine (deterministic bundle, canary, shim) | `scripts/build-terminal.mjs`, `scripts/terminal-assets.test.mjs`, `android/terminal/web/asset-manifest.json`; `android/app/src/androidTest/.../TerminalCanaryTest.kt` green on API 29 emulator | verified-instrumentation (API 29 only; API 34/36 lanes unverified) |
 | R3 terminal reconnect/history | `mac/host/test/terminal-history-runtime.test.ts`, `android/terminal/src/androidTest/.../TerminalRuntimeInstrumentedTest.kt` | verified-instrumentation (API 29 only) |
 | R3 no false approval affordance | `android/feature/session/src/.../ApprovalOfferSheet.kt`, unit state tests | verified-unit |
-| R4 screen states (empty/loading/error/offline/revoked/dormant/indeterminate) | `android/feature/session/src/test/**`, `SessionStatusErrorTest.kt`, `SessionUiStateTest.kt`; instrumentation: `SessionScreensTest.kt`, `SessionStatusSurfacesTest.kt` | verified-instrumentation (emulator-only) |
+| R4 screen states (empty/loading/error/offline/revoked/dormant/indeterminate) | `android/feature/session/src/test/**`, `SessionStatusErrorTest.kt`, `SessionUiStateTest.kt`; instrumentation: `SessionScreensTest.kt`, `SessionStatusSurfacesTest.kt`; API 36 `AppLaunchTest.kt` verifies trusted-state system capture and a screenshot contains rendered UI | verified-instrumentation (emulator-only) |
 | R4 layouts / rotation / process death | `android/core/push/src/androidTest/.../ColdProcessRestoreTest.kt`; foldable/rotation matrix partial | partial; foldable **physical-gate-pending** |
 | R4 trust and path visibility | `android/feature/session`, status surfaces tests | verified-unit |
 | R4 contrast / non-color state / accessibility | `android/feature/session/src/androidTest/**`, `SettingsScreenComposeTest.kt`; TalkBack manual evidence **physical-gate-pending** | verified-instrumentation partial (emulator-only) |
@@ -76,11 +77,11 @@ Honest remaining gates: multi-session sync completeness (session list may show a
 | R6 origin/RP derivation | `scripts/verify-release-identity.mjs`, `mac/host/test/security-webauthn-options.test.ts`, `android/core/security/src/test/.../PasskeyPolicyTest.kt` | verified-unit |
 | R6 real signing identity | `scripts/release-signing-env`, local v3-signed APK digest matches live DAL | verified-unit; off-machine backup/rotation drill **physical-gate-pending** |
 | R6 ceremony verification (challenge/replay/UV/UP/counter) | `mac/host/test/security-webauthn.test.ts`, `security-webauthn-options.test.ts` | verified-unit |
-| R6 provider matrix (API 29–33 Play services, 34+ third-party) | `android/core/security/src/test/.../PasskeyPolicyTest.kt` covers bounded API 34 candidate-service eligibility counting; `android/core/security/src/androidTest/.../PasskeyProviderApi29Test.kt` green on API 29 emulator; live: passkey ceremony (debug authenticator) in relay pairing E2E 2026-08-12 | verified-live (debug authenticator); API 29 Play services and API 34+ third-party provider **physical-gate-pending** |
-| R6 Bitwarden acceptance | no physical device | physical-gate-pending |
+| R6 provider matrix (API 29–33 Play services, 34+ third-party) | `android/core/security/src/test/.../PasskeyPolicyTest.kt` covers bounded API 34 candidate-service eligibility counting; `android/core/security/src/androidTest/.../PasskeyProviderApi29Test.kt` green on API 29 emulator; live debug-authenticator relay ceremony 2026-08-12; Pixel 8 Pro + Bitwarden registration 2026-08-13 | API 34+ Bitwarden registration verified-live; steady-state assertion and API 29 Play services remain pending |
+| R6 Bitwarden acceptance | Pixel 8 Pro created and verified the first-owner credential through Bitwarden over the live relay on 2026-08-13; device certificate issuance succeeded | registration verified-live; steady-state auth-to-sync retest pending |
 | R6 API 29 floor / API 28 negative | API 29 instrumentation green (113 tests, `emulator-5590`); CI lane `android-api29` | verified-instrumentation (emulator-only) |
 | R7 relay/control auth & privacy | `relay/internal/auth/proof_test.go`, `relay/internal/httpapi/*_test.go`, `relay/internal/rendezvous/rendezvous_test.go`, `mac/host/test/relay-*.test.ts`; live: rendezvous exchange, route-key registration, splice over deployed relay | verified-live |
-| R7 inner confidentiality (pinned pairing, mTLS, hostile relay) | `mac/host/test/inner-tls.test.ts`, `direct-tls.test.ts`, `android/core/network/src/test/.../TlsTransportTest.kt`, `TlsHandshakeCarryoverTest.kt`; live: inner provisional TLS 1.3 then mTLS over relay splice | verified-live; hostile-relay end-to-end **not-implemented** |
+| R7 inner confidentiality (pinned pairing, mTLS, hostile relay) | `mac/host/test/inner-tls.test.ts`, `direct-tls.test.ts`, `android/core/network/src/test/.../TlsTransportTest.kt`, `TlsHandshakeCarryoverTest.kt`, `TlsPostHandshakeWriteTest.kt`; live: inner provisional TLS 1.3 then mTLS over relay splice | verified-live; full-duplex engine regression verified-unit; hostile-relay end-to-end **not-implemented** |
 | R7 certificate lifecycle | `mac/host/test/security-pki.test.ts`, `tls-material.test.ts`, `android/core/security/src/androidTest/.../DeviceCertificateStoreTest.kt` | verified-instrumentation partial |
 | R7 deterministic protocol faults | `protocol/ts/test/fuzz.test.ts`, `pimb.test.ts`, `conformance.test.ts`, `android/core/protocol/src/test/**` | verified-unit |
 | R7 at-most-once journal | `mac/host/test/journal.test.ts` (crash matrix, dormant recovery, duplicates); live: fail-closed journal dispatch in semantic round trip | verified-live |
@@ -123,9 +124,9 @@ Honest remaining gates: multi-session sync completeness (session list may show a
 
 | Gap | Requirements | Why it cannot be closed here | Substitute and its weakness |
 |---|---|---|---|
-| No physical Android device | R4/R5/R6/R7/R8/R9 physical rows | No real third-party provider/hardware/OEM/representative timing; passkey ceremonies (API 29 Play services, API 34+ third-party), hardware-backed key, Doze/OEM battery, Gboard/Bluetooth input | API 29 emulator evidence (113 green tests + live relay E2E 2026-08-12 with debug authenticator); weaker — never claimed as physical |
+| Physical-device matrix incomplete | R4/R5/R6/R7/R8/R9 physical rows | Pixel 8 Pro + Bitwarden registration/certificate issuance is verified, but steady-state assertion, API 29 Play services, hardware-backed key, Doze/OEM battery, Gboard/Bluetooth input, and representative timing remain open | API 29 emulator evidence (113 green tests + live relay E2E 2026-08-12 with debug authenticator) plus bounded Pixel 8 Pro evidence; neither closes the remaining rows |
 | API 34+ emulator lanes unexecuted | R6/R8 and full terminal matrix | Only API 29 instrumentation has recorded green results | API 34/36 AVDs installed; runs pending |
-| Release-key backup/cross-check incomplete | R6, R12 | Bitwarden is locked and physical release ceremony absent | Local mode-0600 EC keystore + Keychain + published fingerprint; not sufficient backup |
+| Release-key backup/cross-check incomplete | R6, R12 | Off-machine backup and rotation drill are absent | Local mode-0600 EC keystore + Keychain + published fingerprint; not sufficient backup |
 | Terminal-mode E2E on device | R3 terminal rows | Live on-device terminal run not executed | Emulator terminal canary + runtime instrumentation; API 34 terminal CI lane green |
 | Voice dictation E2E with microphone | R9 | Live microphone dictation run not executed | Emulator `AndroidAudioRecordSourceTest`; host voice unit suites; host-only live synthesized-speech Groq test — none proves phone E2E |
 | GHCR package public visibility | R12 (optional provenance) | Package visibility change not made; runtime uses YC CR | YC Container Registry pull path proven live |

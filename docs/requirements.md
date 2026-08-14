@@ -137,7 +137,7 @@ Reproducible builds use ADR-0019, wrapper checksum, catalogs/locks, exact Pi 0.8
 
 | Gap | Requirements affected | Substitute and its weakness |
 |---|---|---|
-| No physical Android device | R6 Bitwarden, R7 hardware key, R5 timing, R9 microphone, R8 Doze/OEM, R4 input | API 29/34/36 Google APIs plus API 34 default/AOSP ATD, fake auth/audio, adb Doze; none prove physical/provider/OEM behavior |
+| Physical-device matrix incomplete | R6 steady-state Bitwarden/API 29 provider, R7 hardware key, R5 timing, R9 microphone, R8 Doze/OEM, R4 input | Pixel 8 Pro + Bitwarden registration/certificate issuance is verified; API 29/34/36 emulator, fake auth/audio, and adb Doze evidence do not prove the remaining provider/OEM behavior |
 | Release-key backup/cross-check incomplete | R6, R12 | Dedicated mode-0600 EC keystore + Keychain exists; local signed APK matches DAL; Bitwarden/off-machine backup and rotation drill absent |
 | No Firebase credentials, by design | R8 optional adapter | Planned fake-distributor tests; live FCM never a release gate |
 | No cloud resource created | R10 | Local containers for relay and ntfy until Stage 5 |
