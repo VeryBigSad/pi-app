@@ -6,6 +6,6 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": { "pi-mobile-patch": "dist/index.js" },
-  "dependencies": { "@earendil-works/pi-coding-agent": "0.84.0" },
+  "dependencies": { "@earendil-works/pi-coding-agent": "0.99.1" },
   "scripts": { "build": "tsc -b", "test": "vitest run --root ../.. mac/pi-patch/test" }
 }
